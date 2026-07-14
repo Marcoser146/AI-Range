@@ -31,6 +31,12 @@ function fakeEngine(overrides = {}) {
       schemaVersion: "assessment-output@1",
       attempts: 1,
     }),
+    evaluateResourceNeeds: async () => ({
+      resourceRequest: { resource_needed: false },
+      promptVersion: "capacity-analytics@1.0.0",
+      schemaVersion: "resource-request-output@1",
+      attempts: 1,
+    }),
     ...overrides,
   };
 }
@@ -195,4 +201,83 @@ test("ObjectiveCompleted produces AIAssessmentGenerated", async () => {
   assert.equal(received.length, 1);
   assert.equal(received[0].objective_id, "obj-2");
   assert.equal(received[0].quality_score, 0.7);
+});
+
+test("StateSnapshotUpdated publishes ResourceRequestRaised when the engine flags a capacity need", async () => {
+  const broker = new InMemoryBroker();
+  const engine = fakeEngine({
+    evaluateResourceNeeds: async () => ({
+      resourceRequest: {
+        resource_needed: true,
+        resource: "attacker-vm",
+        justification: "Simulating pivot from DC01",
+      },
+      promptVersion: "capacity-analytics@1.0.0",
+      schemaVersion: "resource-request-output@1",
+      attempts: 1,
+    }),
+  });
+  const adapter = createEventAdapter({ broker, engine });
+  adapter.start();
+
+  const received = [];
+  broker.subscribe(TOPICS.RESOURCE_REQUEST_RAISED, (event) => received.push(event));
+
+  await broker.publish(TOPICS.STATE_SNAPSHOT_UPDATED, {
+    snapshot: {
+      exercise_id: "ex-4471",
+      objectives: [{ id: "obj-1", status: "in_progress" }],
+    },
+    student_id: "s-118",
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].event, "ResourceRequestRaised");
+  assert.equal(received[0].exercise_id, "ex-4471");
+  assert.equal(received[0].requested_by, "ai_decision_engine");
+  assert.equal(received[0].resource, "attacker-vm");
+  assert.equal(received[0].justification, "Simulating pivot from DC01");
+});
+
+test("StateSnapshotUpdated does not publish ResourceRequestRaised when resource_needed is false", async () => {
+  const broker = new InMemoryBroker();
+  const adapter = createEventAdapter({ broker, engine: fakeEngine() });
+  adapter.start();
+
+  const received = [];
+  broker.subscribe(TOPICS.RESOURCE_REQUEST_RAISED, (event) => received.push(event));
+
+  await broker.publish(TOPICS.STATE_SNAPSHOT_UPDATED, {
+    snapshot: {
+      exercise_id: "ex-4471",
+      objectives: [{ id: "obj-1", status: "in_progress" }],
+    },
+    student_id: "s-118",
+  });
+
+  assert.equal(received.length, 0);
+});
+
+test("capacity evaluation is throttled per exercise independently of the recommendation throttle", async () => {
+  const broker = new InMemoryBroker();
+  let calls = 0;
+  const engine = fakeEngine({
+    evaluateResourceNeeds: async () => {
+      calls += 1;
+      return {
+        resourceRequest: { resource_needed: false },
+        promptVersion: "v1",
+        schemaVersion: "v1",
+        attempts: 1,
+      };
+    },
+  });
+  const adapter = createEventAdapter({ broker, engine });
+  adapter.start();
+
+  const snapshot = { exercise_id: "ex-9", objectives: [{ id: "obj-1", status: "in_progress" }] };
+  await broker.publish(TOPICS.STATE_SNAPSHOT_UPDATED, { snapshot });
+  await broker.publish(TOPICS.STATE_SNAPSHOT_UPDATED, { snapshot });
+
+  assert.equal(calls, 1);
 });

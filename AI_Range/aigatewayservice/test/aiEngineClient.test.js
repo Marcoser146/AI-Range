@@ -35,6 +35,22 @@ test("assessActionQuality returns a schema-valid assessment stamped with prompt/
   assert.equal(result.promptVersion, engine.ASSESSMENT_SYSTEM_PROMPT_VERSION);
 });
 
+test("evaluateResourceNeeds returns a schema-valid resource request stamped with prompt/schema version", async () => {
+  const result = await engine.evaluateResourceNeeds({
+    exerciseId: "ex-1",
+    studentId: "s-1",
+    snapshot: {
+      exercise_id: "ex-1",
+      objectives: [{ id: "obj-1", status: "in_progress" }],
+    },
+  });
+
+  const check = validate("resource-request-output", result.resourceRequest);
+  assert.equal(check.valid, true, check.errors.join("; "));
+  assert.equal(result.promptVersion, engine.CAPACITY_ANALYTICS_SYSTEM_PROMPT_VERSION);
+  assert.ok(result.attempts >= 1);
+});
+
 test("generateAfterActionReport returns a narrative stamped with prompt/schema version", async () => {
   const result = await engine.generateAfterActionReport({
     exerciseId: "ex-1",

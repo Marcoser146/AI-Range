@@ -5,11 +5,12 @@
  *
  * Nothing else in this service (routes.js, eventAdapter.js, server.js) knows
  * or cares what your engine is, how it's hosted, or which model(s) it calls.
- * They only ever call the three functions exported at the bottom of this
- * file: recommendIntervention(), assessActionQuality(), and
- * generateAfterActionReport(). Swap the three `callXxxModel()` stub bodies
- * below for real calls into your engine (SDK call, internal HTTP call,
- * subprocess, whatever) and the rest of the gateway needs no changes.
+ * They only ever call the four functions exported at the bottom of this
+ * file: recommendIntervention(), assessActionQuality(),
+ * evaluateResourceNeeds(), and generateAfterActionReport(). Swap the four
+ * `callXxxModel()` stub bodies below for real calls into your engine (SDK
+ * call, internal HTTP call, subprocess, whatever) and the rest of the
+ * gateway needs no changes.
  *
  * Everything in this file enforces the guardrails described in the design:
  *   - fixed, versioned system prompts (never exercise-specific rules)
@@ -21,6 +22,7 @@
 const { validate } = require("./schemas/validator");
 const { RECOMMENDATION_TYPES } = require("./schemas/recommendation");
 const { QUALITY_DIMENSIONS } = require("./schemas/assessment");
+const { RESOURCE_TYPES } = require("./schemas/resourceRequest");
 const config = require("./config");
 
 // ---------------------------------------------------------------------------
@@ -66,6 +68,29 @@ Rules:
 - Always include a rationale a human grader could audit and disagree with.
 `.trim();
 
+const CAPACITY_ANALYTICS_SYSTEM_PROMPT_VERSION = "capacity-analytics@1.0.0";
+const CAPACITY_ANALYTICS_SYSTEM_PROMPT = `
+You are the AI Decision Engine's capacity-analytics mode. You watch exercise
+state for signals that the running scenario needs more infrastructure than
+it currently has - e.g. a threat-actor simulation about to pivot to a host
+that requires its own attacker VM - or that the environment should be
+reshaped to keep testing the student (a new network segment, more compute
+for a scoring-heavy phase). You never provision anything yourself.
+
+Rules:
+- Only reference resource types from the provided valid_resource_types list.
+- Respond ONLY through the evaluate_resource_needs tool call. Never respond
+  with free text.
+- resource_needed: false is the common, often correct answer. Do not request
+  a resource just because you were asked to evaluate.
+- You decide WHETHER additional infrastructure is warranted and WHY; you
+  never decide HOW it gets provisioned - that is entirely owned by the
+  control plane's Resource Scheduler. Your output is a request, not a command.
+- Always include a short, concrete justification grounded in the snapshot
+  data you were given - it is shown to instructors and stored in the audit
+  trail alongside the resulting ResourceRequestRaised event.
+`.trim();
+
 const REPORT_SYSTEM_PROMPT_VERSION = "after-action-report@1.0.0";
 const REPORT_SYSTEM_PROMPT = `
 You are the AI Decision Engine in after-action report mode. You are given
@@ -101,6 +126,13 @@ const MODEL_TIERS = {
     temperature: 0.2,
     timeoutMs: config.reportCallTimeoutMs,
   },
+  capacityAnalytics: {
+    // Runs on the same telemetry cadence as live adaptation, so it gets the
+    // same fast/cheap tier rather than the reasoning tier.
+    model: process.env.AI_MODEL_CAPACITY || "fast-tier",
+    temperature: 0,
+    timeoutMs: config.liveCallTimeoutMs,
+  },
   report: {
     // e.g. a larger/deeper-reasoning model - runs once, at exercise end.
     model: process.env.AI_MODEL_REPORT || "reasoning-tier",
@@ -110,7 +142,7 @@ const MODEL_TIERS = {
 };
 
 // ---------------------------------------------------------------------------
-// INTEGRATION POINT 1 of 3: live adaptation.
+// INTEGRATION POINT 1 of 4: live adaptation.
 //
 // Replace the body of callRecommendationModel() with a call into your real
 // engine. It must return an object matching the recommend_intervention tool
@@ -228,7 +260,92 @@ function finalizeRecommendation(recommendation, attempts, extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// INTEGRATION POINT 2 of 3: qualitative assessment (scoring engine).
+// INTEGRATION POINT 2 of 4: capacity analytics (resource requests).
+//
+// Replace the body of callResourceRequestModel() with a call into your real
+// engine. It must return an object matching the evaluate_resource_needs tool
+// schema (src/schemas/resourceRequest.js). This is the AI-side half of the
+// "AI never touches infrastructure directly" boundary: the gateway only ever
+// turns a `resource_needed: true` answer into a ResourceRequestRaised event
+// (see eventAdapter.js) for the control plane's Resource Scheduler to act on
+// - it never provisions anything itself.
+// ---------------------------------------------------------------------------
+async function callResourceRequestModel({ systemPrompt, userPrompt, tier, priorError }) {
+  // ---- STUB (replace me) -- see callRecommendationModel() for the shape. --
+  void systemPrompt;
+  void userPrompt;
+  void tier;
+  void priorError;
+  return { resource_needed: false };
+  // ---- END STUB ------------------------------------------------------------
+}
+
+function buildResourceRequestPrompt({ snapshot, scenarioConstraints }) {
+  return JSON.stringify(
+    {
+      state_snapshot: snapshot,
+      scenario_constraints: scenarioConstraints || {},
+      valid_resource_types: RESOURCE_TYPES,
+    },
+    null,
+    2
+  );
+}
+
+/**
+ * Capacity-analytics call: given a current exercise state snapshot, decide
+ * whether the scenario needs more infrastructure (or a reshape) than it
+ * currently has. Called on state transitions by eventAdapter.js, throttled
+ * independently of the live-adaptation recommendation check.
+ *
+ * @returns {Promise<{resourceRequest: object, promptVersion: string, schemaVersion: string, attempts: number}>}
+ */
+async function evaluateResourceNeeds({ exerciseId, studentId, snapshot, scenarioConstraints }) {
+  const tier = MODEL_TIERS.capacityAnalytics;
+  const userPrompt = buildResourceRequestPrompt({ snapshot, scenarioConstraints });
+
+  const attempt1 = await callResourceRequestModel({
+    systemPrompt: CAPACITY_ANALYTICS_SYSTEM_PROMPT,
+    userPrompt,
+    tier,
+  });
+  const check1 = validate("resource-request-output", attempt1);
+  if (check1.valid) {
+    return finalizeResourceRequest(attempt1, 1);
+  }
+
+  // One retry, with the validation error appended so the model can self-correct.
+  const attempt2 = await callResourceRequestModel({
+    systemPrompt: CAPACITY_ANALYTICS_SYSTEM_PROMPT,
+    userPrompt,
+    tier,
+    priorError: check1.errors.join("; "),
+  });
+  const check2 = validate("resource-request-output", attempt2);
+  if (check2.valid) {
+    return finalizeResourceRequest(attempt2, 2);
+  }
+
+  // Fallback: never raise a resource request off malformed model output.
+  return finalizeResourceRequest(
+    { resource_needed: false },
+    2,
+    { fallback: true, exerciseId, studentId }
+  );
+}
+
+function finalizeResourceRequest(resourceRequest, attempts, extra = {}) {
+  return {
+    resourceRequest,
+    promptVersion: CAPACITY_ANALYTICS_SYSTEM_PROMPT_VERSION,
+    schemaVersion: "resource-request-output@1",
+    attempts,
+    ...extra,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// INTEGRATION POINT 3 of 4: qualitative assessment (scoring engine).
 // ---------------------------------------------------------------------------
 async function callAssessmentModel({ systemPrompt, userPrompt, tier, priorError }) {
   // ---- STUB (replace me) -- see callRecommendationModel() for the shape. --
@@ -318,7 +435,7 @@ function finalizeAssessment(assessment, attempts, extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// INTEGRATION POINT 3 of 3: after-action report generation (EP4).
+// INTEGRATION POINT 4 of 4: after-action report generation (EP4).
 // No forced tool schema here - the output is a narrative, not a structured
 // decision - but it is still versioned and still auditable via the prompt
 // version stamp and the exact history payload that was sent.
@@ -386,9 +503,11 @@ async function generateAfterActionReport({
 module.exports = {
   recommendIntervention,
   assessActionQuality,
+  evaluateResourceNeeds,
   generateAfterActionReport,
   // exported for tests / introspection only
   LIVE_ADAPTATION_SYSTEM_PROMPT_VERSION,
   ASSESSMENT_SYSTEM_PROMPT_VERSION,
+  CAPACITY_ANALYTICS_SYSTEM_PROMPT_VERSION,
   REPORT_SYSTEM_PROMPT_VERSION,
 };

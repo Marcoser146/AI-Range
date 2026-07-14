@@ -10,6 +10,7 @@ const {
   assessmentRequestSchema,
 } = require("./assessment");
 const { reportRequestSchema } = require("./report");
+const { resourceRequestOutputSchema } = require("./resourceRequest");
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 addFormats(ajv);
@@ -20,6 +21,7 @@ for (const schema of [
   assessmentOutputSchema,
   assessmentRequestSchema,
   reportRequestSchema,
+  resourceRequestOutputSchema,
 ]) {
   ajv.addSchema(schema, schema.$id);
 }

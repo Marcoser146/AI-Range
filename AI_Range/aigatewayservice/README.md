@@ -4,8 +4,9 @@
 
 This repo contains the **AI Gateway Service** — the thin wrapper that
 integrates an already-built AI decision engine into the AI-Range event
-plane. It exposes the engine's three modes (live-adaptation
-recommendations, qualitative assessments, after-action reporting) through:
+plane. It exposes the engine's four modes (live-adaptation recommendations,
+qualitative assessments, capacity/infrastructure requests, after-action
+reporting) through:
 
 - a REST API, for on-demand/synchronous calls (instructor dashboard, EP4
   report kickoff, integration tests), and
@@ -19,9 +20,10 @@ is the only place that needs to change to plug in a real engine.
 
 ```
 src/
-  aiEngineClient.js   # THE integration point — replace the 3 model call stubs
+  aiEngineClient.js   # THE integration point — replace the 4 model call stubs
   eventAdapter.js      # subscribes to StateSnapshotUpdated/ObjectiveCompleted,
-                        # publishes AIRecommendationGenerated/AIAssessmentGenerated
+                        # publishes AIRecommendationGenerated/AIAssessmentGenerated/
+                        # ResourceRequestRaised
   routes.js             # REST endpoints (Express router)
   server.js             # wires broker + event adapter + HTTP server
   config.js             # env-driven config
@@ -32,7 +34,7 @@ src/
     errorHandler.js       # uniform { error: { code, message } } shape
     idempotency.js        # Idempotency-Key replay cache
   schemas/
-    recommendation.js, assessment.js, report.js, validator.js
+    recommendation.js, assessment.js, resourceRequest.js, report.js, validator.js
     # ajv schemas the model's tool-forced output (and REST request bodies)
     # are validated against
   store/
@@ -51,11 +53,12 @@ frontend/
 
 ### Integrating your AI engine
 
-Open `src/aiEngineClient.js` and replace the three `callXxxModel()` stub
-bodies (`callRecommendationModel`, `callAssessmentModel`, `callReportModel`)
-with real calls into your engine. Nothing else in the service needs to
-change — `eventAdapter.js`, `routes.js`, and `server.js` only ever call the
-three exported functions (`recommendIntervention`, `assessActionQuality`,
+Open `src/aiEngineClient.js` and replace the four `callXxxModel()` stub
+bodies (`callRecommendationModel`, `callAssessmentModel`,
+`callResourceRequestModel`, `callReportModel`) with real calls into your
+engine. Nothing else in the service needs to change — `eventAdapter.js`,
+`routes.js`, and `server.js` only ever call the four exported functions
+(`recommendIntervention`, `assessActionQuality`, `evaluateResourceNeeds`,
 `generateAfterActionReport`).
 
 Each mode has:
@@ -113,10 +116,37 @@ Every error response has the shape `{ "error": { "code", "message" } }`.
 
 `src/eventAdapter.js` subscribes to `StateSnapshotUpdated` and
 `ObjectiveCompleted` on the broker and publishes `AIRecommendationGenerated`
-/ `AIAssessmentGenerated`. It also implements the approval-gate policy:
-`no_action` and high-confidence, non-structural recommendations auto-apply;
-`branch_change`/`extend_time` and low-confidence recommendations are routed
-`pending_approval` for an instructor. `src/brokers/inMemoryBroker.js` is
-dev/test only — point `server.js` at your real broker client and
-`eventAdapter.js` does not need to change, since it only depends on the
-`{ subscribe, publish }` interface.
+/ `AIAssessmentGenerated` / `ResourceRequestRaised`. It also implements the
+approval-gate policy: `no_action` and high-confidence, non-structural
+recommendations auto-apply; `branch_change`/`extend_time` and low-confidence
+recommendations are routed `pending_approval` for an instructor.
+`src/brokers/inMemoryBroker.js` is dev/test only — point `server.js` at your
+real broker client and `eventAdapter.js` does not need to change, since it
+only depends on the `{ subscribe, publish }` interface.
+
+#### Capacity/infrastructure requests (`ResourceRequestRaised`)
+
+Not every AI decision is about the scenario — some are about capacity. On
+every `StateSnapshotUpdated`, independently of (and on the same throttle
+cadence as) the live-adaptation recommendation check, the gateway also asks
+the engine's capacity-analytics mode (`evaluateResourceNeeds` in
+`aiEngineClient.js`) whether the exercise needs more infrastructure than it
+currently has — e.g. an extra attacker VM to simulate a pivot — or should be
+reshaped to keep testing the student. If so, it publishes:
+
+```json
+{
+  "event": "ResourceRequestRaised",
+  "exercise_id": "ex-4471",
+  "requested_by": "ai_decision_engine",
+  "resource": "attacker-vm",
+  "justification": "Simulating pivot from DC01"
+}
+```
+
+The gateway never provisions anything itself — this event is only ever a
+request. The control plane's Resource Scheduler owns provisioning and
+decides whether/how to act on it. That boundary (AI reasons about what's
+needed and why, control plane is the only thing that can spin up
+infrastructure) is what keeps this safe to scale: an AI system reasoning
+about attacker behavior never gets direct infrastructure access.

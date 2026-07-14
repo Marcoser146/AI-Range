@@ -16,6 +16,17 @@
  * Topics published:
  *   - AIRecommendationGenerated
  *   - AIAssessmentGenerated
+ *   - ResourceRequestRaised  (capacity/infrastructure asks — see below)
+ *
+ * ResourceRequestRaised is the AI-decision-engine -> control-plane path: the
+ * analytics side of the engine may decide mid-exercise that the scenario
+ * needs more infrastructure (e.g. an extra attacker VM to simulate a pivot)
+ * or should be reshaped to keep testing the student. The gateway never
+ * provisions anything itself - it only ever publishes a request event for
+ * the control plane's Resource Scheduler to pick up and act on. That
+ * separation (AI reasons about what's needed, control plane owns the only
+ * thing that can spin up infrastructure) is what keeps an AI system that
+ * reasons about attacker behavior from ever getting direct infra access.
  */
 
 const aiEngineClient = require("./aiEngineClient");
@@ -26,6 +37,7 @@ const TOPICS = {
   OBJECTIVE_COMPLETED: "ObjectiveCompleted",
   AI_RECOMMENDATION_GENERATED: "AIRecommendationGenerated",
   AI_ASSESSMENT_GENERATED: "AIAssessmentGenerated",
+  RESOURCE_REQUEST_RAISED: "ResourceRequestRaised",
 };
 
 // Live adaptation is throttled, not called on every telemetry event: only
@@ -34,6 +46,12 @@ const TOPICS = {
 // cost/latency bounded regardless of telemetry volume.
 const BLOCKED_MINUTES_TRIGGER = 10;
 const MIN_EVAL_INTERVAL_MS = 60_000;
+
+// Capacity analytics has no cheap pre-filter analogous to "blocked minutes" -
+// whether infrastructure is needed is exactly the judgment call delegated to
+// the model - so it's throttled on time alone, on the same interval, kept in
+// a separate map so it fires independently of the recommendation throttle.
+const MIN_CAPACITY_EVAL_INTERVAL_MS = 60_000;
 
 function createEventAdapter({
   broker,
@@ -46,6 +64,7 @@ function createEventAdapter({
   alwaysRequiresApprovalTypes = ["branch_change", "extend_time"],
 } = {}) {
   const lastEvalAtByExercise = new Map();
+  const lastCapacityEvalAtByExercise = new Map();
 
   function shouldEvaluate(snapshot) {
     const blockedObjective = (snapshot.objectives || []).find(
@@ -55,6 +74,15 @@ function createEventAdapter({
 
     const lastEvalAt = lastEvalAtByExercise.get(snapshot.exercise_id) || 0;
     if (Date.now() - lastEvalAt < MIN_EVAL_INTERVAL_MS) return false;
+
+    return true;
+  }
+
+  function shouldEvaluateResourceNeeds(snapshot) {
+    if (!snapshot.exercise_id) return false;
+
+    const lastEvalAt = lastCapacityEvalAtByExercise.get(snapshot.exercise_id) || 0;
+    if (Date.now() - lastEvalAt < MIN_CAPACITY_EVAL_INTERVAL_MS) return false;
 
     return true;
   }
@@ -83,8 +111,7 @@ function createEventAdapter({
     return { status: "pending_approval", reason: "confidence below auto-apply threshold" };
   }
 
-  async function handleStateSnapshotUpdated(event) {
-    const snapshot = event.snapshot || event;
+  async function maybeEvaluateRecommendation(snapshot, event) {
     if (!shouldEvaluate(snapshot)) return;
 
     lastEvalAtByExercise.set(snapshot.exercise_id, Date.now());
@@ -124,6 +151,47 @@ function createEventAdapter({
       schema_version: result.schemaVersion,
       generated_at: new Date().toISOString(),
     });
+  }
+
+  // Capacity/infrastructure side of the same telemetry signal. Runs
+  // independently of maybeEvaluateRecommendation - a scenario can need more
+  // infrastructure whether or not any student is currently stuck - and only
+  // ever publishes a request; it never provisions anything itself. The
+  // control plane's Resource Scheduler owns turning ResourceRequestRaised
+  // into an actual VM/segment/capacity change.
+  async function maybeEvaluateResourceNeeds(snapshot, event) {
+    if (!shouldEvaluateResourceNeeds(snapshot)) return;
+
+    lastCapacityEvalAtByExercise.set(snapshot.exercise_id, Date.now());
+
+    const result = await engine.evaluateResourceNeeds({
+      exerciseId: snapshot.exercise_id,
+      studentId: event.student_id,
+      snapshot,
+      scenarioConstraints: event.scenario_constraints,
+    });
+
+    const { resourceRequest } = result;
+    if (!resourceRequest.resource_needed) return;
+
+    await broker.publish(TOPICS.RESOURCE_REQUEST_RAISED, {
+      event: TOPICS.RESOURCE_REQUEST_RAISED,
+      exercise_id: snapshot.exercise_id,
+      requested_by: "ai_decision_engine",
+      resource: resourceRequest.resource,
+      justification: resourceRequest.justification,
+      prompt_version: result.promptVersion,
+      schema_version: result.schemaVersion,
+      raised_at: new Date().toISOString(),
+    });
+  }
+
+  async function handleStateSnapshotUpdated(event) {
+    const snapshot = event.snapshot || event;
+    await Promise.all([
+      maybeEvaluateRecommendation(snapshot, event),
+      maybeEvaluateResourceNeeds(snapshot, event),
+    ]);
   }
 
   async function handleObjectiveCompleted(event) {
@@ -170,6 +238,7 @@ function createEventAdapter({
     handleStateSnapshotUpdated,
     handleObjectiveCompleted,
     shouldEvaluate,
+    shouldEvaluateResourceNeeds,
     decideApproval,
     targetExistsInScenario,
   };
