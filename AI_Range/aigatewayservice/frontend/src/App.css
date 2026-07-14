@@ -1,0 +1,180 @@
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+header h1 {
+  font-size: 1.35rem;
+  margin: 0;
+}
+
+.health-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: #eee;
+}
+
+.health-banner .dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #999;
+}
+
+.health-banner--ok .dot {
+  background: #2e9e4a;
+}
+
+.health-banner--down .dot {
+  background: #d0342c;
+}
+
+.panel {
+  background: rgba(127, 127, 127, 0.06);
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel h2 {
+  margin-top: 0;
+  font-size: 1.05rem;
+}
+
+.settings-bar {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.settings-bar label {
+  flex: 1;
+  min-width: 200px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: transparent;
+  color: inherit;
+}
+
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
+}
+
+fieldset {
+  border: 1px dashed rgba(127, 127, 127, 0.35);
+  border-radius: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.field-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.field-row label {
+  flex: 1;
+  min-width: 140px;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem 1.1rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: #2b5fd9;
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  color: inherit;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.error {
+  color: #d0342c;
+  font-size: 0.9rem;
+}
+
+.result {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(127, 127, 127, 0.25);
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.badge {
+  background: rgba(43, 95, 217, 0.15);
+  color: #2b5fd9;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge--complete {
+  background: rgba(46, 158, 74, 0.15);
+  color: #2e9e4a;
+}
+
+.badge--failed {
+  background: rgba(208, 52, 44, 0.15);
+  color: #d0342c;
+}
+
+.confidence,
+.meta {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.narrative {
+  white-space: pre-wrap;
+}

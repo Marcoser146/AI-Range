@@ -1,0 +1,319 @@
+openapi: 3.0.3
+info:
+  title: AI-Range AI Gateway Service
+  version: 1.0.0
+  description: >
+    REST surface for the AI Gateway Service that wraps the AI-Range AI
+    decision engine and exposes it to the event plane (timeline engine,
+    scoring engine, EP4 after-action reporting) and to the instructor
+    dashboard. The same underlying engine calls are also reachable
+    automatically via the event-bus adapter (see src/eventAdapter.js);
+    this spec covers the synchronous/on-demand REST path only.
+servers:
+  - url: http://localhost:8080/v1
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: ai-gateway }
+                  time: { type: string, format: date-time }
+
+  /recommendations:
+    post:
+      summary: Request a live-adaptation recommendation
+      description: >
+        Synchronous call into the AI decision engine's live-adaptation mode.
+        Returns a structured recommendation (never free text) produced via
+        tool-forced output and validated server-side. Low-latency budget —
+        callers should expect low single-digit-second responses.
+      operationId: createRecommendation
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string }
+          description: >
+            If supplied, a retried request with the same key returns the
+            cached response instead of triggering a second model call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationRequest"
+      responses:
+        "200":
+          description: Recommendation generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /assessments:
+    post:
+      summary: Request a qualitative assessment for one completed objective
+      description: >
+        Synchronous call into the AI decision engine's assessment mode, used
+        by the scoring engine's AI qualitative assessor. quality_score is a
+        capped 0-1 signal; the caller's rubric decides how much it's worth.
+      operationId: createAssessment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssessmentRequest"
+      responses:
+        "200":
+          description: Assessment generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssessmentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /reports:
+    post:
+      summary: Start an after-action report generation job (EP4)
+      description: >
+        Asynchronous — report generation has no real-time latency budget.
+        Returns immediately with a job id; poll GET /reports/{jobId} for
+        the result.
+      operationId: createReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportRequest"
+      responses:
+        "202":
+          description: Report job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportJobAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /reports/{jobId}:
+    get:
+      summary: Poll an after-action report job
+      operationId: getReport
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Job status/result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Static shared-secret bearer token (AI_GATEWAY_API_KEY). Swap for real secret management in production.
+
+  responses:
+    BadRequest:
+      description: Request failed schema validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Unauthorized:
+      description: Missing/malformed Authorization header
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: Invalid API key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: Resource does not exist
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: invalid_request }
+            message: { type: string }
+          required: [code, message]
+      required: [error]
+
+    StateSnapshot:
+      type: object
+      description: Same shape as the State Manager's exercise state snapshot.
+      required: [exercise_id, objectives]
+      properties:
+        exercise_id: { type: string }
+        elapsed_minutes: { type: number }
+        objectives:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              status: { type: string, enum: [not_started, in_progress, complete] }
+              blocked_minutes: { type: number }
+        student_actions_last_5min: { type: number }
+
+    RecommendationRequest:
+      type: object
+      required: [exercise_id, snapshot]
+      properties:
+        exercise_id: { type: string }
+        student_id: { type: string }
+        snapshot: { $ref: "#/components/schemas/StateSnapshot" }
+        scenario_constraints:
+          type: object
+          description: Authored objectives/injects/branches this recommendation may reference.
+        recent_recommendations:
+          type: array
+          items: { type: object }
+          description: Last few recommendations, to avoid repeating a rejected suggestion.
+
+    Recommendation:
+      type: object
+      required: [recommendation_type, confidence, rationale]
+      properties:
+        recommendation_type:
+          type: string
+          enum: [inject_hint, difficulty_adjust, branch_change, extend_time, no_action]
+        target_id:
+          type: string
+          description: Required unless recommendation_type is no_action.
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        rationale: { type: string }
+
+    RecommendationResponse:
+      type: object
+      properties:
+        exercise_id: { type: string }
+        student_id: { type: string }
+        recommendation: { $ref: "#/components/schemas/Recommendation" }
+        prompt_version: { type: string }
+        schema_version: { type: string }
+        attempts: { type: integer }
+        generated_at: { type: string, format: date-time }
+
+    AssessmentRequest:
+      type: object
+      required: [exercise_id, objective_id, action_log]
+      properties:
+        exercise_id: { type: string }
+        student_id: { type: string }
+        objective_id: { type: string }
+        dimension: { type: string, enum: [methodology, efficiency, documentation] }
+        action_log:
+          type: array
+          items: { type: object }
+        submission_text: { type: string }
+
+    Assessment:
+      type: object
+      required: [objective_id, quality_score, dimension, rationale]
+      properties:
+        objective_id: { type: string }
+        quality_score: { type: number, minimum: 0, maximum: 1 }
+        dimension: { type: string, enum: [methodology, efficiency, documentation] }
+        evidence: { type: string }
+        rationale: { type: string }
+
+    AssessmentResponse:
+      type: object
+      properties:
+        exercise_id: { type: string }
+        student_id: { type: string }
+        assessment: { $ref: "#/components/schemas/Assessment" }
+        prompt_version: { type: string }
+        schema_version: { type: string }
+        attempts: { type: integer }
+        generated_at: { type: string, format: date-time }
+
+    ReportRequest:
+      type: object
+      required: [exercise_id]
+      properties:
+        exercise_id: { type: string }
+        mode: { type: string, enum: [post_exercise_report] }
+        state_snapshots:
+          type: array
+          items: { $ref: "#/components/schemas/StateSnapshot" }
+        recommendations:
+          type: array
+          items: { $ref: "#/components/schemas/Recommendation" }
+        assessments:
+          type: array
+          items: { $ref: "#/components/schemas/Assessment" }
+        final_scores: { type: object }
+
+    ReportJobAccepted:
+      type: object
+      properties:
+        job_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending] }
+        poll_url: { type: string }
+
+    ReportJob:
+      type: object
+      properties:
+        job_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, complete, failed] }
+        result:
+          type: object
+          nullable: true
+          properties:
+            narrative: { type: string }
+            promptVersion: { type: string }
+            schemaVersion: { type: string }
+        error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
