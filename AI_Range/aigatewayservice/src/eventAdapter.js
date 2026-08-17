@@ -1,13 +1,13 @@
 "use strict";
 
 /**
- * eventAdapter.js — the automated half of the AI Gateway.
+ * eventAdapter.js - the automated half of the AI Gateway.
  *
  * Subscribes to event-plane topics the State Manager and scoring engine
  * already publish, calls the AI engine (via aiEngineClient.js) the same way
  * the REST layer does, and republishes structured, validated events. This
- * is what makes the live-adaptation loop "automatic" without any subsystem
- * calling the AI engine directly.
+ * is what makes the live-adaptation loop "automatic" - nothing else has to
+ * call the AI engine directly.
  *
  * Topics consumed:
  *   - StateSnapshotUpdated   (from the State Manager)
@@ -16,17 +16,17 @@
  * Topics published:
  *   - AIRecommendationGenerated
  *   - AIAssessmentGenerated
- *   - ResourceRequestRaised  (capacity/infrastructure asks — see below)
+ *   - ResourceRequestRaised  (capacity/infrastructure asks, see below)
  *
  * ResourceRequestRaised is the AI-decision-engine -> control-plane path: the
  * analytics side of the engine may decide mid-exercise that the scenario
- * needs more infrastructure (e.g. an extra attacker VM to simulate a pivot)
+ * needs more infrastructure (say, an extra attacker VM to simulate a pivot)
  * or should be reshaped to keep testing the student. The gateway never
- * provisions anything itself - it only ever publishes a request event for
- * the control plane's Resource Scheduler to pick up and act on. That
- * separation (AI reasons about what's needed, control plane owns the only
- * thing that can spin up infrastructure) is what keeps an AI system that
- * reasons about attacker behavior from ever getting direct infra access.
+ * provisions anything itself - it only publishes a request event for the
+ * control plane's Resource Scheduler to pick up and act on. That split (AI
+ * reasons about what's needed, control plane owns the only thing that can
+ * actually spin up infrastructure) is what keeps a system reasoning about
+ * attacker behavior from ever getting direct infra access.
  */
 
 const aiEngineClient = require("./aiEngineClient");
@@ -40,28 +40,36 @@ const TOPICS = {
   RESOURCE_REQUEST_RAISED: "ResourceRequestRaised",
 };
 
-// Live adaptation is throttled, not called on every telemetry event: only
-// on state transitions that look like a stuck-student signal, and never
-// more than once per MIN_EVAL_INTERVAL_MS per exercise, to keep inference
-// cost/latency bounded regardless of telemetry volume.
+// Live adaptation isn't called on every telemetry event - only on state
+// transitions that look like a stuck-student signal, and never more than
+// once per MIN_EVAL_INTERVAL_MS per exercise. Keeps inference cost/latency
+// bounded no matter how much telemetry is flowing.
 const BLOCKED_MINUTES_TRIGGER = 10;
 const MIN_EVAL_INTERVAL_MS = 60_000;
 
-// Capacity analytics has no cheap pre-filter analogous to "blocked minutes" -
-// whether infrastructure is needed is exactly the judgment call delegated to
-// the model - so it's throttled on time alone, on the same interval, kept in
-// a separate map so it fires independently of the recommendation throttle.
+// Capacity analytics doesn't have a cheap pre-filter the way "blocked
+// minutes" works for recommendations - whether infrastructure is needed is
+// exactly the judgment call we're delegating to the model - so it's
+// throttled on time alone, on the same interval, but tracked in its own map
+// so it fires independently of the recommendation throttle.
 const MIN_CAPACITY_EVAL_INTERVAL_MS = 60_000;
 
 function createEventAdapter({
   broker,
   engine = aiEngineClient,
   autoApplyConfidenceThreshold = 0.8,
-  // Types that change scoring, end the exercise early, or add a new
-  // threat-actor branch always go to the instructor's approval queue,
-  // regardless of confidence - this list is the hard floor under the
-  // confidence-threshold config, not a replacement for it.
+  // Anything that changes scoring, ends the exercise early, or adds a new
+  // threat-actor branch always goes to the instructor's approval queue, no
+  // matter the confidence. This list is a hard floor under the
+  // confidence-threshold config below, not a replacement for it.
   alwaysRequiresApprovalTypes = ["branch_change", "extend_time"],
+  // Optional: src/store/approvalStore.js. When provided, every
+  // pending_approval recommendation is persisted here too, not just
+  // published on the broker - this is what src/routes/admin.js reads/
+  // writes for the instructor approve/reject workflow. Left undefined by
+  // default (a no-op) so existing callers/tests that construct the adapter
+  // without one keep working unchanged.
+  approvalStore = null,
 } = {}) {
   const lastEvalAtByExercise = new Map();
   const lastCapacityEvalAtByExercise = new Map();
@@ -87,10 +95,10 @@ function createEventAdapter({
     return true;
   }
 
-  // Redundant with a later branch-evaluator check by design: catching a
-  // malformed target here means a bad recommendation never becomes an
-  // event on the broker in the first place, which keeps the audit log
-  // clean even though the timeline engine will also validate it.
+  // This duplicates a check the timeline engine will also do downstream,
+  // but catching a bad target_id here means it never becomes an event on
+  // the broker in the first place - keeps the audit log clean even with
+  // the redundancy.
   function targetExistsInScenario(targetId, scenarioConstraints) {
     if (!targetId) return true; // no_action carries no target_id
     const knownIds = scenarioConstraints?.known_ids;
@@ -151,14 +159,35 @@ function createEventAdapter({
       schema_version: result.schemaVersion,
       generated_at: new Date().toISOString(),
     });
+
+    if (approvalStore && approval.status === "pending_approval") {
+      try {
+        await approvalStore.create({
+          exercise_id: snapshot.exercise_id,
+          student_id: event.student_id,
+          recommendation_type: recommendation.recommendation_type,
+          target_id: recommendation.target_id || null,
+          confidence: recommendation.confidence,
+          rationale: recommendation.rationale,
+          reason: approval.reason,
+          prompt_version: result.promptVersion,
+        });
+      } catch (err) {
+        // A persistence failure here shouldn't unpublish an event that
+        // already went out on the broker - log and move on, same as the
+        // rest of this file's error handling.
+        // eslint-disable-next-line no-console
+        console.error("[eventAdapter] failed to persist approval queue entry:", err.message);
+      }
+    }
   }
 
-  // Capacity/infrastructure side of the same telemetry signal. Runs
-  // independently of maybeEvaluateRecommendation - a scenario can need more
-  // infrastructure whether or not any student is currently stuck - and only
-  // ever publishes a request; it never provisions anything itself. The
-  // control plane's Resource Scheduler owns turning ResourceRequestRaised
-  // into an actual VM/segment/capacity change.
+  // Capacity/infrastructure side of the same telemetry signal, but it runs
+  // independently of maybeEvaluateRecommendation above - a scenario can
+  // need more infrastructure whether or not a student happens to be stuck
+  // right now. This only ever publishes a request; the control plane's
+  // Resource Scheduler is what actually turns ResourceRequestRaised into a
+  // VM/segment/capacity change.
   async function maybeEvaluateResourceNeeds(snapshot, event) {
     if (!shouldEvaluateResourceNeeds(snapshot)) return;
 
@@ -206,8 +235,9 @@ function createEventAdapter({
 
     const check = validate("assessment-output", result.assessment);
     if (!check.valid) {
-      // Should be unreachable — aiEngineClient already validates/falls back —
-      // but never let a malformed event reach the broker.
+      // Shouldn't be reachable - aiEngineClient already validates and falls
+      // back on its own - but we still don't want a malformed event
+      // reaching the broker, so double-check here too.
       // eslint-disable-next-line no-console
       console.error("[eventAdapter] refusing to publish invalid assessment:", check.errors);
       return;
@@ -234,7 +264,7 @@ function createEventAdapter({
 
   return {
     start,
-    // exposed for direct/unit testing without going through the broker
+    // exposed so tests can call these directly without going through the broker
     handleStateSnapshotUpdated,
     handleObjectiveCompleted,
     shouldEvaluate,

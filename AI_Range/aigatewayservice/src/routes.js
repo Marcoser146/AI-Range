@@ -5,7 +5,7 @@ const express = require("express");
 const { validate } = require("./schemas/validator");
 const { ApiError } = require("./middleware/errorHandler");
 const { createIdempotencyStore } = require("./middleware/idempotency");
-const { requireAuth } = require("./middleware/auth");
+const { requireServiceAuth } = require("./middleware/auth");
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -20,20 +20,24 @@ function createRouter({ engine, jobStore }) {
   const router = express.Router();
   const recommendationIdempotency = createIdempotencyStore();
 
-  // GET /v1/health — liveness check, no auth required. Registered before the
-  // requireAuth middleware below, so it's the one route exempt from it.
+  // GET /v1/health - liveness check, no auth required.
   router.get("/health", (req, res) => {
     res.status(200).json({ status: "ok", service: "ai-gateway", time: new Date().toISOString() });
   });
 
-  router.use(requireAuth);
+  // Auth is attached per-route (not via a blanket router.use()) so that
+  // when this router and the chat proxy router (src/chatProxy.js) are both
+  // mounted at /v1, a request for a chat-proxy path (e.g.
+  // /v1/chat/completions) that doesn't match any route below falls through
+  // to the chat proxy's router instead of being rejected here first.
 
-  // POST /v1/recommendations — synchronous live-adaptation call.
-  // Used by the instructor dashboard for on-demand recommendations, and by
+  // POST /v1/recommendations - synchronous live-adaptation call. Used by
+  // the instructor dashboard for on-demand recommendations, and by
   // integration tests that don't want to stand up a broker. The automated
-  // loop instead goes through eventAdapter.js on StateSnapshotUpdated.
+  // loop goes through eventAdapter.js on StateSnapshotUpdated instead.
   router.post(
     "/recommendations",
+    requireServiceAuth,
     recommendationIdempotency.middleware,
     asyncHandler(async (req, res) => {
       const check = validate("recommendation-request", req.body);
@@ -61,9 +65,10 @@ function createRouter({ engine, jobStore }) {
     })
   );
 
-  // POST /v1/assessments — synchronous qualitative-scoring call, one objective.
+  // POST /v1/assessments - synchronous qualitative-scoring call, one objective at a time.
   router.post(
     "/assessments",
+    requireServiceAuth,
     asyncHandler(async (req, res) => {
       const check = validate("assessment-request", req.body);
       if (!check.valid) {
@@ -91,20 +96,25 @@ function createRouter({ engine, jobStore }) {
     })
   );
 
-  // POST /v1/reports — start an after-action report job (EP4). Async because
-  // report generation has no real-time latency budget and can run long.
+  // POST /v1/reports - kicks off an after-action report job (EP4). This is
+  // async because report generation doesn't have a real-time latency budget
+  // and can take a while.
   router.post(
     "/reports",
+    requireServiceAuth,
     asyncHandler(async (req, res) => {
       const check = validate("report-request", req.body);
       if (!check.valid) {
         throw new ApiError(400, "invalid_request", check.errors.join("; "));
       }
 
-      const jobId = jobStore.create({ exercise_id: req.body.exercise_id });
+      const jobId = await jobStore.create({ exercise_id: req.body.exercise_id });
 
-      // Fire and forget from the HTTP handler's point of view — the client
-      // polls GET /v1/reports/:job_id for completion.
+      // From the HTTP handler's point of view this is fire-and-forget - the
+      // client polls GET /v1/reports/:job_id to find out when it's done.
+      // jobStore.complete/fail are awaited inside their own callbacks (not
+      // by this handler) so a slow write to Postgres never holds up the
+      // 202 response below.
       engine
         .generateAfterActionReport({
           exerciseId: req.body.exercise_id,
@@ -124,11 +134,12 @@ function createRouter({ engine, jobStore }) {
     })
   );
 
-  // GET /v1/reports/:job_id — poll report status/result.
+  // GET /v1/reports/:job_id - poll for report status/result.
   router.get(
     "/reports/:jobId",
+    requireServiceAuth,
     asyncHandler(async (req, res) => {
-      const job = jobStore.get(req.params.jobId);
+      const job = await jobStore.get(req.params.jobId);
       if (!job) {
         throw new ApiError(404, "not_found", `No report job with id ${req.params.jobId}`);
       }

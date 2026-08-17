@@ -1,7 +1,8 @@
 // Mirrors the `assess_action_quality` tool schema used by the scoring
 // engine's AI qualitative assessor. quality_score is a capped 0-1 signal,
-// never a raw point value - the score aggregator (outside this service)
-// owns turning it into points via the exercise's authored rubric weights.
+// never a raw point value - it's the score aggregator, outside this
+// service, that turns it into points using the exercise's authored rubric
+// weights.
 const QUALITY_DIMENSIONS = ["methodology", "efficiency", "documentation"];
 
 const assessmentOutputSchema = {
@@ -18,7 +19,7 @@ const assessmentOutputSchema = {
   required: ["objective_id", "quality_score", "dimension", "rationale"],
 };
 
-// Request body for POST /v1/assessments
+// request body for POST /v1/assessments
 const assessmentRequestSchema = {
   $id: "assessment-request",
   type: "object",

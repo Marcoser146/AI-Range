@@ -1,0 +1,1167 @@
+<title>Range Inference Tower</title>
+<style>
+  :root {
+    --ground: #F2F3F5;
+    --surface: #FFFFFF;
+    --surface-2: #E9EBEF;
+    --ink: #171A20;
+    --ink-2: #454C58;
+    --ink-3: #737B88;
+    --rule: #D6DAE0;
+    --rule-soft: #E4E7EC;
+    --accent: #96660F;
+    --accent-soft: #F5EAD4;
+    --keep: #1F6660;
+    --keep-soft: #DDEDEB;
+    --change: #9A3D26;
+    --change-soft: #F6E3DD;
+    --new: #3D4E86;
+    --new-soft: #E2E6F4;
+    --crit: #A32020;
+    --code-bg: #1A1D24;
+    --code-ink: #D9DEE6;
+    --code-dim: #7D8797;
+    --code-key: #E0A340;
+    --code-str: #86BFB8;
+
+    --serif: ui-serif, "Iowan Old Style", "Source Serif 4", "Charter", Palatino, Georgia, serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101318;
+      --surface: #171B22;
+      --surface-2: #1F242C;
+      --ink: #E5E8ED;
+      --ink-2: #A9B1BD;
+      --ink-3: #79828F;
+      --rule: #2C323B;
+      --rule-soft: #232830;
+      --accent: #E0A340;
+      --accent-soft: #33291593;
+      --keep: #63BDB4;
+      --keep-soft: #1A32306e;
+      --change: #E08A6E;
+      --change-soft: #35211b7a;
+      --new: #93A4E0;
+      --new-soft: #1F253C7a;
+      --crit: #E87070;
+      --code-bg: #0B0E13;
+      --code-ink: #D9DEE6;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #101318;
+    --surface: #171B22;
+    --surface-2: #1F242C;
+    --ink: #E5E8ED;
+    --ink-2: #A9B1BD;
+    --ink-3: #79828F;
+    --rule: #2C323B;
+    --rule-soft: #232830;
+    --accent: #E0A340;
+    --accent-soft: #33291593;
+    --keep: #63BDB4;
+    --keep-soft: #1A32306e;
+    --change: #E08A6E;
+    --change-soft: #35211b7a;
+    --new: #93A4E0;
+    --new-soft: #1F253C7a;
+    --crit: #E87070;
+    --code-bg: #0B0E13;
+    --code-ink: #D9DEE6;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 24px 120px;
+  }
+
+  @media (min-width: 1060px) {
+    .shell { grid-template-columns: 216px minmax(0, 1fr); gap: 56px; }
+  }
+
+  /* ---------- nav ---------- */
+  nav.toc { display: none; }
+
+  @media (min-width: 1060px) {
+    nav.toc {
+      display: block;
+      position: sticky;
+      top: 0;
+      align-self: start;
+      max-height: 100vh;
+      overflow-y: auto;
+      padding: 88px 0 40px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    nav.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+    nav.toc a {
+      color: var(--ink-3);
+      text-decoration: none;
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 6px;
+      border-left: 2px solid transparent;
+      padding-left: 10px;
+      margin-left: -12px;
+    }
+    nav.toc a:hover { color: var(--accent); border-left-color: var(--accent); }
+    nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    nav.toc .n { color: var(--ink-3); opacity: .6; font-variant-numeric: tabular-nums; }
+  }
+
+  main { min-width: 0; }
+
+  /* ---------- masthead ---------- */
+  header.masthead {
+    padding: 88px 0 44px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 56px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 22px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2.3rem, 5.4vw, 3.5rem);
+    line-height: 1.06;
+    letter-spacing: -.022em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+    max-width: 17ch;
+  }
+  .standfirst {
+    font-size: 1.115rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+    max-width: 66ch;
+    margin: 0;
+  }
+  .masthead-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 26px;
+    margin-top: 30px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+  .masthead-meta b { color: var(--ink-2); font-weight: 500; }
+
+  /* ---------- sections ---------- */
+  section { margin-bottom: 76px; scroll-margin-top: 28px; }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: clamp(1.5rem, 2.6vw, 1.92rem);
+    font-weight: 600;
+    letter-spacing: -.014em;
+    line-height: 1.2;
+    margin: 0 0 8px;
+    text-wrap: balance;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 14px;
+    align-items: baseline;
+  }
+  h2 .n {
+    font-family: var(--mono);
+    font-size: .58em;
+    color: var(--accent);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-size: 1.0rem;
+    font-weight: 650;
+    letter-spacing: -.005em;
+    margin: 40px 0 12px;
+    color: var(--ink);
+  }
+  h4 {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+    margin: 30px 0 10px;
+  }
+  .lede { color: var(--ink-2); max-width: 68ch; margin: 0 0 26px; font-size: 1.02rem; }
+
+  p { max-width: 70ch; margin: 0 0 16px; }
+  ul, ol { max-width: 70ch; padding-left: 20px; margin: 0 0 16px; }
+  li { margin-bottom: 8px; }
+  li::marker { color: var(--ink-3); }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  strong { font-weight: 640; color: var(--ink); }
+
+  code {
+    font-family: var(--mono);
+    font-size: .855em;
+    background: var(--surface-2);
+    padding: .1em .34em;
+    border-radius: 3px;
+    color: var(--ink);
+    word-break: break-word;
+  }
+  a code { color: inherit; }
+
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    font-family: var(--mono);
+    font-size: 12.4px;
+    line-height: 1.62;
+    padding: 18px 20px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0 0 20px;
+    border: 1px solid var(--rule);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; color: inherit; }
+  pre .c { color: var(--code-dim); }
+  pre .k { color: var(--code-key); }
+  pre .s { color: var(--code-str); }
+
+  .filename {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: .04em;
+    margin: 0 0 6px;
+  }
+
+  /* ---------- tables ---------- */
+  .tw { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.6px; min-width: 540px; }
+  th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; color: var(--ink-2); }
+  tr:last-child td { border-bottom: none; }
+  td strong, td b { color: var(--ink); }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.mono, th.mono { font-family: var(--mono); font-size: 12.2px; }
+
+  /* ---------- chips ---------- */
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 2.5px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .chip.keep { background: var(--keep-soft); color: var(--keep); }
+  .chip.change { background: var(--change-soft); color: var(--change); }
+  .chip.new { background: var(--new-soft); color: var(--new); }
+
+  /* ---------- callouts ---------- */
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 5px 5px 0;
+    padding: 15px 18px;
+    margin: 0 0 22px;
+    max-width: 72ch;
+    font-size: .945rem;
+  }
+  .note.crit { border-left-color: var(--crit); }
+  .note.keep { border-left-color: var(--keep); }
+  .note > p:last-child { margin-bottom: 0; }
+  .note .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 5px;
+  }
+  .note.crit .tag { color: var(--crit); }
+  .note.keep .tag { color: var(--keep); }
+
+  /* ---------- vram bars ---------- */
+  .gpu { margin-bottom: 22px; }
+  .gpu-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    margin-bottom: 7px;
+    gap: 12px;
+  }
+  .gpu-head b { color: var(--ink); font-weight: 550; letter-spacing: .05em; }
+  .bar {
+    display: flex;
+    height: 34px;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--rule);
+    background: var(--surface-2);
+  }
+  .seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .03em;
+    color: #fff;
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 1px solid rgba(0,0,0,.28);
+  }
+  .seg:last-child { border-right: none; }
+  .seg.free { color: var(--ink-3); background: transparent; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin-top: 9px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+  /* ---------- tier stack diagram ---------- */
+  .stack { display: flex; flex-direction: column; gap: 3px; margin: 0 0 10px; }
+  .tier {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 12px 16px;
+    display: grid;
+    grid-template-columns: 118px minmax(0, 1fr);
+    gap: 16px;
+    align-items: center;
+  }
+  @media (max-width: 620px) { .tier { grid-template-columns: 1fr; gap: 8px; } }
+  .tier-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .tier-body { display: flex; flex-wrap: wrap; gap: 7px; }
+  .box {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
+  }
+  .box.hi { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 500; }
+  .arrow { text-align: center; color: var(--ink-3); font-size: 11px; font-family: var(--mono); line-height: 1; padding: 1px 0; }
+
+  hr.rule { border: none; border-top: 1px solid var(--rule); margin: 44px 0; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 24px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    max-width: 70ch;
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="shell">
+<nav class="toc" aria-label="Contents">
+  <ol>
+    <li><a href="#s1"><span class="n">01</span><span>Shape of the system</span></a></li>
+    <li><a href="#s2"><span class="n">02</span><span>GPU &amp; storage plan</span></a></li>
+    <li><a href="#s3"><span class="n">03</span><span>Host build on STIG</span></a></li>
+    <li><a href="#s4"><span class="n">04</span><span>Quadlet runtime</span></a></li>
+    <li><a href="#s5"><span class="n">05</span><span>vLLM configuration</span></a></li>
+    <li><a href="#s6"><span class="n">06</span><span>Open WebUI &amp; RAG</span></a></li>
+    <li><a href="#s7"><span class="n">07</span><span>Gateway: keep / change</span></a></li>
+    <li><a href="#s8"><span class="n">08</span><span>The chat proxy</span></a></li>
+    <li><a href="#s9"><span class="n">09</span><span>Structured output</span></a></li>
+    <li><a href="#s10"><span class="n">10</span><span>LoRA adaptation labs</span></a></li>
+    <li><a href="#s11"><span class="n">11</span><span>GitOps convergence</span></a></li>
+    <li><a href="#s12"><span class="n">12</span><span>HWIL &amp; tenancy</span></a></li>
+    <li><a href="#s13"><span class="n">13</span><span>Acceptance tests</span></a></li>
+    <li><a href="#s14"><span class="n">14</span><span>Risk register</span></a></li>
+    <li><a href="#s15"><span class="n">15</span><span>Phase plan</span></a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="masthead">
+  <p class="eyebrow">AI-Range · Implementation Reference</p>
+  <h1>Range Inference Tower</h1>
+  <p class="standfirst">Standing up a single hardened GPU tower as the shared AI service for a multi-enclave cyber range — and folding the existing <code>aigatewayservice</code> into it as the policy plane rather than replacing it. What survives untouched, what gets rewritten, and every integration point in between.</p>
+  <div class="masthead-meta">
+    <span><b>Target</b> Ace LogicAD Fusion · TR PRO 9975WX · 2× RTX PRO 6000 Max-Q</span>
+    <span><b>Base</b> RHEL 9 / DISA STIG</span>
+    <span><b>Runtime</b> podman + quadlet</span>
+    <span><b>Serving</b> vLLM + Open WebUI</span>
+  </div>
+</header>
+
+<!-- ===================================================== -->
+<section id="s1">
+  <h2><span class="n">01</span><span>The shape of the system</span></h2>
+  <p class="lede">The tower carries two completely different kinds of traffic, and almost every design decision downstream follows from keeping them separated but served by one pool of weights.</p>
+
+  <p><strong>Class A — student chat.</strong> Interactive, bursty, many concurrent humans, fully untrusted input (students will paste malware samples and hostile payloads into the box <em>by design</em>, and will try to jailbreak the model as a lab exercise). Path: browser → enclave proxy → Open WebUI → gateway → vLLM.</p>
+
+  <p><strong>Class B — range automation.</strong> Programmatic, low-volume, latency-budgeted, schema-constrained. This is what <code>aigatewayservice</code> already does: the four engine modes, driven by the event plane and the instructor dashboard. Path: range control plane → broker → event adapter → gateway → vLLM.</p>
+
+  <h3>The one decision that shapes everything else</h3>
+  <p>Open WebUI can point straight at vLLM's OpenAI-compatible port. <strong>Do not let it.</strong> Every guardrail your project already implements — prompt versioning, schema validation, retry-then-safe-fallback, provenance stamping — lives in the gateway. A direct Open WebUI → vLLM path is an unaudited, unattributed, unmetered second door into the same GPUs, and on a training range you need to be able to answer "which student asked what, on which exercise, against which model version" for every single token generated.</p>
+
+  <p>So: <strong>vLLM binds to loopback only</strong>, and the gateway is the sole client. That means the gateway grows an OpenAI-compatible surface it does not have today (§8) — the largest single piece of new code in this plan.</p>
+
+  <div class="stack">
+    <div class="tier">
+      <div class="tier-label">Enclaves</div>
+      <div class="tier-body">
+        <span class="box">Cloud A · VLAN 41</span><span class="box">Cloud B · VLAN 42</span><span class="box">Cloud C · VLAN 43</span><span class="box">Range control plane</span>
+      </div>
+    </div>
+    <div class="arrow">↓ &nbsp; HWIL trunk · mTLS · firewalld zone per interface</div>
+    <div class="tier">
+      <div class="tier-label">Ingress</div>
+      <div class="tier-body">
+        <span class="box">nginx :443 per VLAN IP</span><span class="box">own cert + OIDC issuer per enclave</span>
+      </div>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="tier">
+      <div class="tier-label">Front ends</div>
+      <div class="tier-body">
+        <span class="box">open-webui@a</span><span class="box">open-webui@b</span><span class="box">open-webui@c</span><span class="box">instructor dashboard</span>
+      </div>
+    </div>
+    <div class="arrow">↓ &nbsp; plus: NATS ← range event plane</div>
+    <div class="tier">
+      <div class="tier-label">Policy plane</div>
+      <div class="tier-body">
+        <span class="box hi">ai-gateway :8080 — authn, tenancy, quotas, audit, schema</span>
+      </div>
+    </div>
+    <div class="arrow">↓ &nbsp; 127.0.0.1 only</div>
+    <div class="tier">
+      <div class="tier-label">Inference</div>
+      <div class="tier-body">
+        <span class="box">vllm-gptoss :8000</span><span class="box">vllm-mistral :8001</span><span class="box">vllm-devstral :8002</span><span class="box">vllm-granite :8003</span><span class="box">vllm-embed :8004</span><span class="box">vllm-lora :8005</span>
+      </div>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="tier">
+      <div class="tier-label">State</div>
+      <div class="tier-body">
+        <span class="box">postgres (jobs, audit, quotas)</span><span class="box">chroma per enclave</span><span class="box">model + adapter store on U.2</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note keep">
+    <span class="tag">Preserve this</span>
+    <p>The <code>ResourceRequestRaised</code> boundary in <a href="../src/eventAdapter.js">eventAdapter.js</a> — the AI reasons about what infrastructure is needed and why, the control plane's Resource Scheduler is the only thing that can actually provision — is the single most important safety property in the existing design. Nothing in this plan touches it. Extend the same principle to the chat path: the student-facing model gets <em>no</em> tool calling that can reach the network.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="s2">
+  <h2><span class="n">02</span><span>GPU allocation and storage</span></h2>
+  <p class="lede">192 GB of VRAM across two cards, but they are not one pool. Plan around that, not against it.</p>
+
+  <h3>No NVLink — so avoid tensor parallelism</h3>
+  <p>The RTX PRO 6000 Blackwell workstation cards have no NVLink bridge; cross-GPU traffic goes over PCIe. <code>--tensor-parallel-size 2</code> works but pays an all-reduce penalty on every decode step, and it couples both cards' lifecycles to one unit. Fortunately you don't need it: <strong>gpt-oss-120b in MXFP4 is roughly 61 GB of weights and fits on a single 96 GB card</strong> with room for a real KV cache. Every model in your list fits on one card. Treat the cards as two independent serving domains.</p>
+
+  <h4>GPU 0 — primary chat, dedicated</h4>
+  <div class="gpu">
+    <div class="gpu-head"><b>CUDA 0</b><span>96 GB · single tenant · <code>--gpu-memory-utilization 0.94</code></span></div>
+    <div class="bar">
+      <div class="seg" style="background:#96660F; width:64%">gpt-oss-120b MXFP4 · 61 GB</div>
+      <div class="seg" style="background:#C08A2E; width:30%">KV cache + activations · ~29 GB</div>
+      <div class="seg free" style="width:6%">reserve</div>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:#96660F"></span>weights</span>
+      <span><span class="sw" style="background:#C08A2E"></span>paged KV</span>
+      <span><span class="sw" style="background:var(--rule)"></span>CUDA context + headroom</span>
+    </div>
+  </div>
+
+  <h4>GPU 1 — elective models, multi-tenant</h4>
+  <div class="gpu">
+    <div class="gpu-head"><b>CUDA 1</b><span>96 GB · 4–5 processes · sum of utilization &lt; 0.95</span></div>
+    <div class="bar">
+      <div class="seg" style="background:#1F6660; width:26%">mistral-small-24b FP8 · 0.26</div>
+      <div class="seg" style="background:#2E8078; width:26%">devstral-24b FP8 · 0.26</div>
+      <div class="seg" style="background:#3D4E86; width:14%">granite-8b · 0.14</div>
+      <div class="seg" style="background:#5A6BA8; width:4%">emb</div>
+      <div class="seg" style="background:#7A5CA0; width:22%">student LoRA host · 0.22</div>
+      <div class="seg free" style="width:8%">·</div>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:#1F6660"></span>RAG backbone</span>
+      <span><span class="sw" style="background:#2E8078"></span>code labs</span>
+      <span><span class="sw" style="background:#3D4E86"></span>utility / live-adaptation</span>
+      <span><span class="sw" style="background:#5A6BA8"></span>nomic-embed</span>
+      <span><span class="sw" style="background:#7A5CA0"></span>untrusted student adapters</span>
+    </div>
+  </div>
+
+  <p>Each co-located vLLM process interprets <code>--gpu-memory-utilization</code> as a fraction of the <em>whole card</em> and pre-allocates it, so the fractions must sum below 1.0 with about 0.5–1 GB of CUDA context overhead per process left over. The active set is exactly what your brief says it should be — <code>group_vars</code>, not code (§11).</p>
+
+  <div class="note">
+    <span class="tag">Why a separate LoRA host</span>
+    <p>Student-trained adapters are untrusted artifacts. Loading one into the same vLLM process that serves the rest of the class puts a student's fine-tune in the batch scheduler alongside everyone else's requests. Give them their own process with its own memory slice, and let it crash without taking the classroom down.</p>
+  </div>
+
+  <h3>Mode → model mapping</h3>
+  <p>This replaces the placeholder <code>"fast-tier"</code> / <code>"reasoning-tier"</code> strings in <code>MODEL_TIERS</code>.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Consumer</th><th>Model</th><th>Why</th><th>Budget</th></tr></thead>
+    <tbody>
+      <tr><td>Student chat (default)</td><td class="mono">gpt-oss-120b</td><td>Best reasoning available on-box; MoE keeps decode cheap</td><td class="num">stream</td></tr>
+      <tr><td>Student chat (code labs)</td><td class="mono">devstral-small-2507</td><td>Script and malware-artifact analysis, agentic tooling exercises</td><td class="num">stream</td></tr>
+      <tr><td><code>recommendIntervention</code></td><td class="mono">granite-3.3-8b</td><td>Hard 4 s wall clock; short structured output</td><td class="num">8 000 ms</td></tr>
+      <tr><td><code>evaluateResourceNeeds</code></td><td class="mono">granite-3.3-8b</td><td>Same cadence, same tier, mostly returns <code>false</code></td><td class="num">8 000 ms</td></tr>
+      <tr><td><code>assessActionQuality</code></td><td class="mono">mistral-small-3.1-24b</td><td>Needs to cite evidence from an action log; no live budget</td><td class="num">30 000 ms</td></tr>
+      <tr><td><code>generateAfterActionReport</code></td><td class="mono">gpt-oss-120b</td><td>Runs once at exercise end; long context, quality over latency</td><td class="num">300 000 ms</td></tr>
+      <tr><td>RAG retrieval</td><td class="mono">nomic-embed-text-v1.5</td><td>Served through vLLM's <code>/v1/embeddings</code></td><td class="num">2 000 ms</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note crit">
+    <span class="tag">Config change required</span>
+    <p><code>AI_LIVE_CALL_TIMEOUT_MS=4000</code> is too tight once a real model is behind it. A structured recommendation is ~150 output tokens; at 80 tok/s that's ~2 s of decode before you count prefill, queueing behind other requests, and TTFT. Raise it to 8 000 ms. Nothing blocks on it — the event path is already fire-and-forget and already falls back to <code>no_action</code>.</p>
+  </div>
+
+  <h3>Storage layout</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Device</th><th>Layout</th><th>Carries</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">1 TB NVMe</td><td>LUKS + LVM, STIG partitioning: separate <code>/home</code>, <code>/var</code>, <code>/var/log</code>, <code>/var/log/audit</code>, <code>/var/tmp</code>, <code>/tmp</code></td><td>OS, container images, quadlet units. Give <code>/var/log/audit</code> at least 20 GB — STIG auditd rules are noisy and a full audit partition halts the box.</td></tr>
+      <tr><td class="mono">2× 7.68 TB U.2</td><td><strong>LVM RAID1</strong> → ~7.68 TB usable, LUKS on top, mounted <code>/srv/airange</code></td><td>Model weights, LoRA adapters and checkpoints, Postgres data, vector stores, transcript archive, Triton/Inductor caches</td></tr>
+    </tbody>
+  </table></div>
+  <p>Mirror rather than stripe. Model weights are re-stageable, but the transcript and audit data on the same array is evidentiary — a single-disk failure that loses a semester of training records is a much worse day than 7 TB of unused capacity. AES-NI makes the LUKS overhead invisible next to NVMe latency.</p>
+
+  <pre><code>/srv/airange/
+  models/          <span class="c"># pre-staged weights, read-only to containers</span>
+    gpt-oss-120b/  mistral-small-3.1-24b/  devstral-small-2507/
+    granite-3.3-8b/  nomic-embed-text-v1.5/
+  adapters/        <span class="c"># student LoRA output, per-student quota</span>
+    &lt;cohort&gt;/&lt;student&gt;/&lt;run-id&gt;/
+  cache/           <span class="c"># HF_HOME, TRITON_CACHE_DIR, VLLM_CACHE_ROOT, TORCHINDUCTOR_CACHE_DIR</span>
+  state/
+    postgres/  chroma-a/  chroma-b/  chroma-c/
+  corpus/          <span class="c"># course content for RAG, git-synced</span>
+  transcripts/     <span class="c"># exported chat audit, retention-policied</span></code></pre>
+</section>
+
+<!-- ===================================================== -->
+<section id="s3">
+  <h2><span class="n">03</span><span>Host build under the RHEL 9 STIG</span></h2>
+  <p class="lede">Four STIG controls will break a GPU inference stack in ways that look like unrelated bugs. Solve them during the build, not during a class.</p>
+
+  <h3>Secure Boot vs. the NVIDIA kernel module</h3>
+  <p>The STIG requires UEFI Secure Boot enabled. The NVIDIA kernel modules are out-of-tree and unsigned, so they will silently fail to load and <code>nvidia-smi</code> will report no devices. Enroll a Machine Owner Key at build time and sign the modules, and re-sign on every kernel or driver update — this is the single most common way a hardened GPU host comes back from patching with no GPUs.</p>
+  <pre><code><span class="c"># build-time, once</span>
+openssl req -new -x509 -newkey rsa:2048 -keyout MOK.priv -outform DER \
+  -out MOK.der -nodes -days 36500 -subj "/CN=AI-Range Module Signing/"
+mokutil --import MOK.der          <span class="c"># reboot, enroll at MOK manager</span>
+
+<span class="c"># after every driver/kernel update — wire this into a dkms hook</span>
+/usr/src/kernels/$(uname -r)/scripts/sign-file sha256 MOK.priv MOK.der \
+  /lib/modules/$(uname -r)/extra/nvidia*.ko
+
+<span class="c"># and blacklist nouveau</span>
+echo "blacklist nouveau" > /etc/modprobe.d/blacklist-nouveau.conf</code></pre>
+  <p>Use the NVIDIA data-center/RHEL 9 repo package rather than the <code>.run</code> installer so DKMS handles rebuilds. Blackwell (<code>sm_120</code>) needs a recent driver branch and CUDA 12.8 or later — verify <code>nvidia-smi</code> reports both cards and that <code>torch.cuda.get_device_capability()</code> returns <code>(12, 0)</code> before you go further.</p>
+
+  <h3>FIPS mode breaks MD5 in Python libraries</h3>
+  <p>The STIG requires FIPS 140-3 mode. Under FIPS, <code>hashlib.md5()</code> raises instead of returning a digest — and several parts of the HuggingFace and web-framework ecosystem call MD5 for non-security purposes like cache keys and ETags. The failure surfaces as an opaque <code>ValueError</code> deep in a library at container start.</p>
+  <pre><code><span class="c"># confirm mode</span>
+fips-mode-setup --check
+cat /proc/sys/crypto/fips_enabled     <span class="c"># must be 1</span></code></pre>
+  <p>Test each container image under FIPS during Phase 1. Where a dependency trips, the fix is a patched call site using <code>hashlib.md5(data, usedforsecurity=False)</code>, which is permitted under FIPS on RHEL 9's Python. Pin the image digests once you have a working set — an unpinned base-image bump can reintroduce this at 03:00 via ansible-pull.</p>
+
+  <h3>SELinux and GPU device access from containers</h3>
+  <p>With SELinux enforcing, containers cannot open <code>/dev/nvidia*</code> by default. Use the Container Device Interface rather than <code>--privileged</code>:</p>
+  <pre><code>setsebool -P container_use_devices 1
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+nvidia-ctk cdi list                   <span class="c"># expect nvidia.com/gpu=0, =1, =all</span></code></pre>
+  <p>Then every quadlet references <code>AddDevice=nvidia.com/gpu=0</code> and stays unprivileged. Regenerate the CDI spec after driver updates — an ansible handler on the driver package is the right place. Volume mounts need <code>:z</code> (shared) or <code>:Z</code> (private) labels; the read-only model store wants <code>:ro,z</code> since several containers read it.</p>
+
+  <h3><code>noexec</code> on /tmp vs. Triton kernel compilation</h3>
+  <p>STIG mounts <code>/tmp</code> with <code>noexec</code>. vLLM compiles Triton kernels and CUDA graphs at startup and writes them to a cache under the user's temp or home directory; if that path is <code>noexec</code>, startup fails or silently falls back to a slow path. Redirect every cache to the U.2 array explicitly — do not rely on defaults:</p>
+  <pre><code>Environment=HF_HOME=/srv/airange/cache/hf
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=VLLM_CACHE_ROOT=/srv/airange/cache/vllm
+Environment=TRITON_CACHE_DIR=/srv/airange/cache/triton
+Environment=TORCHINDUCTOR_CACHE_DIR=/srv/airange/cache/inductor
+Environment=XDG_CACHE_HOME=/srv/airange/cache/xdg
+Environment=TMPDIR=/srv/airange/cache/tmp
+Environment=OUTLINES_CACHE_DIR=/srv/airange/cache/outlines</code></pre>
+
+  <div class="note crit">
+    <span class="tag">Offline by construction</span>
+    <p><code>HF_HUB_OFFLINE=1</code> is not an optimization, it's a control. The tower must never reach HuggingFace at runtime. Weights are pre-staged to <code>/srv/airange/models</code> through your approved artifact path, checksummed, and referenced by local path in the quadlet. Ansible verifies the checksum; it does not download the model. Publishing weights as OCI artifacts into your internal registry and pulling with <code>oras</code> gives you the same provenance and signing story as your container images.</p>
+  </div>
+
+  <h3>Other host items</h3>
+  <ul>
+    <li><strong>Rootless podman</strong> for every service account, with <code>loginctl enable-linger &lt;user&gt;</code> so units survive logout. CDI device access works rootless. Keep the podman API socket disabled.</li>
+    <li><strong>No local accounts on the chat UI.</strong> The STIG's password complexity, lockout, and reuse rules are painful to satisfy in Open WebUI's local auth. Federate to the range IdP instead (§6) and turn local signup off entirely.</li>
+    <li><strong>DoD consent banner</strong> on the Open WebUI login page and on SSH. Open WebUI supports custom login content; template it from Ansible so it's version-controlled.</li>
+    <li><strong>Persistent journald</strong> with size caps, plus <code>auditd</code> watch rules on <code>/srv/airange/models</code> and <code>/srv/airange/adapters</code> so weight substitution is detectable.</li>
+    <li><strong>firewalld zones bound per interface</strong>, default-deny egress. The tower needs no outbound internet at all after staging.</li>
+  </ul>
+</section>
+
+<!-- ===================================================== -->
+<section id="s4">
+  <h2><span class="n">04</span><span>The quadlet runtime</span></h2>
+  <p class="lede">Every container is a systemd unit generated from a <code>.container</code> file, and every <code>.container</code> file is an Ansible template. That is the whole GitOps story on the host side.</p>
+
+  <p>Files land in <code>/etc/containers/systemd/</code> for root-run services or <code>~/.config/containers/systemd/</code> for rootless. A representative serving unit:</p>
+
+  <p class="filename">/etc/containers/systemd/vllm-gptoss.container</p>
+  <pre><code><span class="k">[Unit]</span>
+Description=vLLM · gpt-oss-120b · primary chat
+After=network-online.target srv-airange.mount
+Requires=srv-airange.mount
+
+<span class="k">[Container]</span>
+Image=registry.internal.range/ai/vllm:{{ vllm_image_tag }}
+ContainerName=vllm-gptoss
+AddDevice=nvidia.com/gpu=0
+Volume=/srv/airange/models:/models:ro,z
+Volume=/srv/airange/cache:/cache:z
+PublishPort=127.0.0.1:8000:8000
+Environment=VLLM_CACHE_ROOT=/cache/vllm
+Environment=HF_HOME=/cache/hf
+Environment=HF_HUB_OFFLINE=1
+Environment=TRITON_CACHE_DIR=/cache/triton
+Environment=VLLM_LOGGING_LEVEL=INFO
+HealthCmd=/bin/sh -c "curl -sf http://localhost:8000/health || exit 1"
+HealthStartPeriod=600s
+HealthInterval=30s
+Exec=--model /models/gpt-oss-120b \
+     --served-model-name gpt-oss-120b \
+     --host 0.0.0.0 --port 8000 \
+     --max-model-len {{ gptoss_max_model_len }} \
+     --max-num-seqs {{ gptoss_max_num_seqs }} \
+     --gpu-memory-utilization 0.94 \
+     --enable-prefix-caching \
+     --disable-log-requests
+
+<span class="k">[Service]</span>
+Restart=always
+RestartSec=20
+TimeoutStartSec=900
+
+<span class="k">[Install]</span>
+WantedBy=multi-user.target</code></pre>
+
+  <div class="note">
+    <span class="tag">Two flags that matter more than they look</span>
+    <p><code>HealthStartPeriod=600s</code> — loading 61 GB of weights and warming CUDA graphs takes minutes, and a default health check will kill the container mid-load in a restart loop that looks like a crash.</p>
+    <p><code>--disable-log-requests</code> — vLLM otherwise writes prompts to the container log. On this box prompts are student work product subject to a retention policy; you want exactly one audit path (the gateway, §8), not a second uncontrolled copy in journald.</p>
+  </div>
+
+  <h3>Making training and elective serving mutually exclusive</h3>
+  <p>A LoRA training run needs ~40 GB on GPU 1, which it can't have while four serving processes hold 0.9 of the card. Let systemd enforce it rather than a human remembering:</p>
+  <p class="filename">/etc/containers/systemd/lora-train@.container (excerpt)</p>
+  <pre><code><span class="k">[Unit]</span>
+Description=LoRA fine-tune · %i
+Conflicts=vllm-mistral.service vllm-devstral.service
+After=vllm-mistral.service vllm-devstral.service</code></pre>
+  <p>Starting <code>lora-train@cohort3.service</code> now stops the two 24 B electives and frees ~50 GB; when it exits, an <code>OnFailure</code>/<code>ExecStopPost</code> hook or a plain <code>systemd</code> dependency brings them back. GPU 0 — the primary chat model the whole class is using — is never touched by a training job.</p>
+
+  <h3>Unit inventory</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Unit</th><th>GPU</th><th>Port</th><th>Restart risk</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">vllm-gptoss</td><td class="num">0</td><td class="num">127.0.0.1:8000</td><td><b>High</b> — drops every student stream, ~3–5 min reload</td></tr>
+      <tr><td class="mono">vllm-mistral</td><td class="num">1</td><td class="num">127.0.0.1:8001</td><td>Medium</td></tr>
+      <tr><td class="mono">vllm-devstral</td><td class="num">1</td><td class="num">127.0.0.1:8002</td><td>Medium</td></tr>
+      <tr><td class="mono">vllm-granite</td><td class="num">1</td><td class="num">127.0.0.1:8003</td><td>Medium — breaks live adaptation until back</td></tr>
+      <tr><td class="mono">vllm-embed</td><td class="num">1</td><td class="num">127.0.0.1:8004</td><td>Low</td></tr>
+      <tr><td class="mono">vllm-lora</td><td class="num">1</td><td class="num">127.0.0.1:8005</td><td>Low — isolated blast radius</td></tr>
+      <tr><td class="mono">ai-gateway</td><td>—</td><td class="num">127.0.0.1:8080</td><td>Low — sub-second restart, but drops in-flight SSE</td></tr>
+      <tr><td class="mono">open-webui@{a,b,c}</td><td>—</td><td class="num">127.0.0.1:3001-3</td><td>Low</td></tr>
+      <tr><td class="mono">postgres</td><td>—</td><td class="num">127.0.0.1:5432</td><td>Medium — gateway degrades to read-only audit buffering</td></tr>
+      <tr><td class="mono">nginx</td><td>—</td><td class="num">:443 per VLAN</td><td>Low — reload, don't restart</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ===================================================== -->
+<section id="s5">
+  <h2><span class="n">05</span><span>vLLM configuration</span></h2>
+
+  <h3>Context length is your capacity dial</h3>
+  <p>KV cache is what limits concurrency, and it scales linearly with <code>--max-model-len</code>. Serving gpt-oss-120b at its full 128 K context means a handful of students can each consume gigabytes of cache. Cap it. For classroom chat, 16 K–32 K is generous — few student conversations exceed it, and the ones that do are usually a sign the session should be reset anyway. Make it a <code>group_vars</code> value so an instructor running a long-context exercise can raise it for that block.</p>
+
+  <p><code>--enable-prefix-caching</code> is close to free money here. Every student in a cohort shares the same system prompt and, with RAG, frequently the same retrieved course chunks. Prefix caching skips re-prefilling those tokens, which is a large fraction of prefill work in a classroom.</p>
+
+  <p><code>--max-num-seqs</code> bounds the batch. Set it deliberately: too low and the GPU idles while requests queue, too high and per-stream tokens/sec drops below reading speed and every student experiences the model as slow. Start at 32 for the primary and tune from the Phase 3 measurements.</p>
+
+  <h3>Per-model starting flags</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Model</th><th>Key flags</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">gpt-oss-120b</td><td class="mono">--max-model-len 32768<br>--max-num-seqs 32<br>--gpu-memory-utilization 0.94<br>--enable-prefix-caching</td><td>MXFP4 checkpoint; do not re-quantize. Verify the MoE + MXFP4 path has <code>sm_120</code> kernel coverage in your pinned vLLM build before committing to it as primary (§14).</td></tr>
+      <tr><td class="mono">mistral-small-3.1-24b</td><td class="mono">--quantization fp8<br>--max-model-len 32768<br>--gpu-memory-utilization 0.26</td><td>RAG backbone and assessment tier. FP8 is native on Blackwell.</td></tr>
+      <tr><td class="mono">devstral-small-2507</td><td class="mono">--quantization fp8<br>--max-model-len 32768<br>--gpu-memory-utilization 0.26</td><td>Code and script analysis. Tool-calling parser enabled only for instructor-side use.</td></tr>
+      <tr><td class="mono">granite-3.3-8b</td><td class="mono">--quantization fp8<br>--max-model-len 16384<br>--gpu-memory-utilization 0.14<br>--enable-lora --max-loras 4</td><td>Live-adaptation tier and the LoRA base. Short contexts — the structured-output prompts are small.</td></tr>
+      <tr><td class="mono">nomic-embed-text-v1.5</td><td class="mono">--task embed<br>--gpu-memory-utilization 0.03</td><td>Serves <code>/v1/embeddings</code>. Note the model's <code>search_query:</code> / <code>search_document:</code> prefix convention — the gateway should apply it, since Open WebUI won't.</td></tr>
+      <tr><td class="mono">vllm-lora (granite base)</td><td class="mono">--enable-lora --max-lora-rank 32<br>VLLM_ALLOW_RUNTIME_LORA_UPDATING=1</td><td>Separate process for untrusted student adapters; hot-load via <code>/v1/load_lora_adapter</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Pin the version, in the image</h3>
+  <p>vLLM moves fast and quantization kernel support for new silicon lands unevenly. Build one internal image with a pinned vLLM version, pinned PyTorch/CUDA, and your FIPS patches; push it to the internal registry by digest; reference the digest in the quadlet. An unpinned <code>:latest</code> plus a 30-minute ansible-pull timer is a recipe for a model that stops loading during a lab with no correlated human action to blame.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s6">
+  <h2><span class="n">06</span><span>Open WebUI, tenancy, and RAG</span></h2>
+
+  <h3>One instance per enclave</h3>
+  <p>Open WebUI keeps conversations, users, prompts, and its RAG index in one database. Sharing a single instance across enclaves means Cloud A's students and Cloud B's students share a namespace — and shared chat history and a shared vector index across a range boundary is a data-spill vector you cannot easily argue away in an authorization package. Run three small instances instead. They're a few hundred megabytes of RAM each, and separation becomes structural rather than a matter of correct RBAC configuration.</p>
+
+  <p class="filename">/etc/containers/systemd/open-webui@.container (excerpt)</p>
+  <pre><code>Environment=OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1
+Environment=OPENAI_API_KEY={{ webui_gateway_token[enclave] }}
+Environment=ENABLE_OLLAMA_API=false
+Environment=WEBUI_AUTH=true
+Environment=ENABLE_SIGNUP=false
+Environment=ENABLE_LOGIN_FORM=false            <span class="c"># SSO only</span>
+Environment=ENABLE_OAUTH_SIGNUP=true
+Environment=OAUTH_PROVIDER_NAME=Range SSO
+Environment=OPENID_PROVIDER_URL={{ oidc_issuer[enclave] }}/.well-known/openid-configuration
+Environment=DATABASE_URL=postgresql://webui_{{ enclave }}@127.0.0.1/webui_{{ enclave }}
+Environment=RAG_EMBEDDING_ENGINE=openai
+Environment=RAG_EMBEDDING_MODEL=nomic-embed-text-v1.5
+Environment=ENABLE_RAG_WEB_SEARCH=false
+Environment=ENABLE_WEB_SEARCH=false
+Environment=ENABLE_CODE_INTERPRETER=false
+Environment=ENABLE_IMAGE_GENERATION=false</code></pre>
+
+  <p>Note that Open WebUI points at <strong>the gateway</strong>, not at vLLM, and carries a per-enclave token. That token is how the gateway knows which tenant a request belongs to before it has even looked at the user's JWT.</p>
+
+  <div class="note crit">
+    <span class="tag">Turn these off and keep them off</span>
+    <p>Web search, URL-fetch RAG, code interpreter, and image generation. Students paste hostile content into this box deliberately — a model with a fetch tool plus prompt-injectable input is a request forgery primitive pointed at the inside of your range. There's no egress anyway, but disable them explicitly so a future Open WebUI upgrade defaulting one back on doesn't hand it to you.</p>
+  </div>
+
+  <h3>Course-content RAG</h3>
+  <p>Keep the corpus in Git alongside the Ansible repo (or an internal object store for large PDFs). Ansible syncs <code>/srv/airange/corpus/&lt;enclave&gt;/</code>, and a small ingest job re-indexes on content change into that enclave's Chroma volume. Embeddings go through the gateway to <code>vllm-embed</code>, so retrieval is on the same audited path as generation.</p>
+  <p>Two details worth getting right: apply nomic's <code>search_document:</code> prefix at ingest and <code>search_query:</code> at retrieval — mixing them degrades recall noticeably and silently. And treat retrieved course content as data the model reads, never as instructions: the gateway's system prompt should say so explicitly, because a student who can get a document into the corpus can otherwise steer everyone's assistant.</p>
+
+  <h3>Identity mapping</h3>
+  <p>The OIDC <code>sub</code> claim becomes <code>student_id</code>, and a group or custom claim carries cohort and exercise enrollment. This is what makes per-student attribution, per-student quota, and the transcript retention policy possible — and it's the same identifier the range's event plane already uses in <code>StateSnapshotUpdated</code>, which lets you join a student's chat history to their exercise telemetry in the after-action report.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s7">
+  <h2><span class="n">07</span><span>What survives, what changes in the gateway</span></h2>
+  <p class="lede">The good news is structural: the service was built around exactly the seam this deployment needs. Roughly half of it ships unchanged, and the abstraction boundaries you drew are in the right places.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>File</th><th></th><th>Disposition</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">src/schemas/*.js</td><td><span class="chip keep">Keep</span></td><td>Transport-independent. They now do <em>double duty</em>: same object drives ajv validation and vLLM's <code>guided_json</code> (§9). One caveat on <code>recommendation-output</code>, below.</td></tr>
+      <tr><td class="mono">src/eventAdapter.js</td><td><span class="chip keep">Keep</span></td><td>Untouched. It depends only on <code>{subscribe, publish}</code> and the four engine functions — both contracts hold. The throttles and the approval gate are exactly right for this environment.</td></tr>
+      <tr><td class="mono">src/routes.js</td><td><span class="chip keep">Keep</span></td><td>All four endpoints stay as-is. New routes mount alongside.</td></tr>
+      <tr><td class="mono">src/middleware/errorHandler.js</td><td><span class="chip keep">Keep</span></td><td>Uniform error shape stays. Chat proxy errors need the OpenAI error shape instead, handled locally in the proxy.</td></tr>
+      <tr><td class="mono">src/middleware/idempotency.js</td><td><span class="chip keep">Keep</span></td><td>Single-process tower, so in-memory is defensible. Revisit only if you add a second node.</td></tr>
+      <tr><td class="mono">openapi/ai-gateway.yaml</td><td><span class="chip keep">Keep</span></td><td>Extend with the chat/embeddings/admin paths; nothing existing changes.</td></tr>
+      <tr><td class="mono">frontend/</td><td><span class="chip keep">Keep</span></td><td>Instructor dashboard survives — but see the approval-queue gap below.</td></tr>
+      <tr><td class="mono">src/aiEngineClient.js</td><td><span class="chip change">Rewrite</span></td><td>The four <code>callXxxModel()</code> stubs become real OpenAI-compatible calls. <code>MODEL_TIERS</code> gains real served-model names and per-mode upstream URLs. Prompts, versioning, retry-then-fallback, and provenance stamping all stay exactly as written.</td></tr>
+      <tr><td class="mono">src/middleware/auth.js</td><td><span class="chip change">Rewrite</span></td><td>Single shared bearer token → three identity modes: OIDC JWT (students, via Open WebUI), per-service token or mTLS (range control plane), and OIDC (instructors). Must resolve <code>{ tenant, student_id, role }</code> onto the request.</td></tr>
+      <tr><td class="mono">src/store/jobStore.js</td><td><span class="chip change">Rewrite</span></td><td>In-memory Map → Postgres. Report jobs must survive a converge-triggered restart; a job lost to an ansible-pull at the 30-minute mark is a report an instructor is waiting on.</td></tr>
+      <tr><td class="mono">src/brokers/inMemoryBroker.js</td><td><span class="chip change">Rewrite</span></td><td>Add <code>natsBroker.js</code> implementing the same two methods. Keep the in-memory one for tests. The event plane lives in the range control plane, so the gateway is a NATS <em>client</em> across the HWIL link, not a broker host.</td></tr>
+      <tr><td class="mono">src/config.js</td><td><span class="chip change">Rewrite</span></td><td>Upstream URLs, per-mode model names, tenant table, quota limits, OIDC issuers, DB DSN. Drop the <code>"change-me"</code> default — fail closed on a missing secret rather than booting with a known key.</td></tr>
+      <tr><td class="mono">src/chatProxy.js</td><td><span class="chip new">New</span></td><td>OpenAI-compatible surface for Open WebUI: <code>/v1/models</code>, <code>/v1/chat/completions</code> with SSE streaming, <code>/v1/embeddings</code>. The largest new component — spec in §8.</td></tr>
+      <tr><td class="mono">src/upstreams.js</td><td><span class="chip new">New</span></td><td>Registry of vLLM instances: model name → URL, health state, per-tenant allowlist. Backs both the chat proxy and <code>aiEngineClient</code>.</td></tr>
+      <tr><td class="mono">src/audit.js</td><td><span class="chip new">New</span></td><td>Append-only record per inference: tenant, student, exercise, model, prompt version, token counts, latency, and the transcript reference. The compliance backbone.</td></tr>
+      <tr><td class="mono">src/quota.js</td><td><span class="chip new">New</span></td><td>Per-student and per-tenant token budgets and rate limits. Prevents one student's runaway loop from consuming a class's GPU.</td></tr>
+      <tr><td class="mono">src/routes/admin.js</td><td><span class="chip new">New</span></td><td>Approval queue (below), quota inspection, upstream health, LoRA adapter load/unload for instructors.</td></tr>
+      <tr><td class="mono">Containerfile</td><td><span class="chip new">New</span></td><td>UBI 9 Node base — <code>registry.access.redhat.com/ubi9/nodejs-22-minimal</code>. RHEL-based so it inherits the host's FIPS-validated crypto rather than fighting it.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note crit">
+    <span class="tag">Existing gap worth closing now</span>
+    <p><code>eventAdapter.js</code> publishes recommendations with <code>approval_status: "pending_approval"</code>, and nothing in the repo consumes them. There is no endpoint to list the queue and no UI to approve or reject. In a live classroom that queue <em>is</em> where instructors spend their attention — and the rejection data is what the after-action report's "call out rejected recommendations" rule depends on. Add <code>GET /v1/approvals</code>, <code>POST /v1/approvals/:id/{approve,reject}</code>, a persisted queue, and a dashboard panel.</p>
+  </div>
+
+  <h3>Health checks have to mean something</h3>
+  <p><code>GET /v1/health</code> currently returns <code>{status: "ok"}</code> unconditionally. Once vLLM is downstream, that's actively harmful — nginx and Open WebUI will keep routing to a gateway whose models are all still loading. Split it: <code>/v1/health</code> stays a trivial liveness probe, and a new <code>/v1/ready</code> polls each upstream's <code>/health</code> and reports per-model readiness. Open WebUI's model list should be built from ready upstreams only, so students never see a model they can't actually use.</p>
+
+  <h3>Housekeeping</h3>
+  <p>The repo has no commits yet and <code>.env</code> exists on disk with <code>.gitignore</code> covering it — good, keep it that way. Before this goes to GitLab: initialize with signed commits, confirm <code>.env</code> was never staged, and move every real secret to <code>ansible-vault</code> delivered as a systemd <code>EnvironmentFile</code> (§11).</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s8">
+  <h2><span class="n">08</span><span>The chat proxy</span></h2>
+  <p class="lede">One new module carries the student-facing path. It looks like a pass-through and is mostly a policy engine.</p>
+
+  <h4>Request pipeline</h4>
+  <ol>
+    <li><strong>Authenticate</strong> — verify the enclave token, then the student's OIDC JWT. Resolve <code>{ tenant, student_id, cohort, role }</code>.</li>
+    <li><strong>Authorize the model</strong> — is the requested <code>model</code> on this tenant's allowlist and currently ready? Reject with a message a student can act on, not a 502.</li>
+    <li><strong>Check quota</strong> — per-student tokens/hour and concurrent-stream cap. Refusing here is far better than letting one student starve the batch scheduler.</li>
+    <li><strong>Clamp parameters</strong> — cap <code>max_tokens</code>, clamp <code>temperature</code>, reject <code>n &gt; 1</code>, strip any <code>tools</code> the student's role isn't allowed to use.</li>
+    <li><strong>Inject the range system prompt</strong> — versioned, same discipline as the four existing mode prompts. Establishes scope, states that retrieved documents are data and not instructions, and carries the training-context framing.</li>
+    <li><strong>Forward</strong> to the mapped upstream, streaming.</li>
+    <li><strong>Tee the stream</strong> — relay SSE chunks to the client while assembling the full response for the audit record.</li>
+    <li><strong>Record</strong> — on stream end (or abort), write the audit row with token counts, latency, finish reason, and prompt version.</li>
+  </ol>
+
+  <div class="note">
+    <span class="tag">The one genuinely tricky part</span>
+    <p>Streaming. You must pipe the upstream SSE body straight through without buffering — a student watching a paused cursor for eight seconds while you accumulate the whole response is the difference between "fast" and "broken" — while still assembling the text for audit. In Node, pipe the response body and accumulate in a <code>transform</code>. Handle client disconnect by aborting the upstream request (<code>AbortController</code>), or an abandoned tab holds a KV-cache slot for the full generation. Test aborts explicitly; it's the most common bug in hand-rolled LLM proxies.</p>
+  </div>
+
+  <h4>Surface</h4>
+  <div class="tw"><table>
+    <thead><tr><th>Route</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /v1/models</td><td>Ready upstreams filtered by the caller's tenant allowlist. Open WebUI populates its model picker from this.</td></tr>
+      <tr><td class="mono">POST /v1/chat/completions</td><td>Streaming and non-streaming. Full pipeline above.</td></tr>
+      <tr><td class="mono">POST /v1/embeddings</td><td>Routes to <code>vllm-embed</code>, applies the nomic task prefix, quota-metered.</td></tr>
+      <tr><td class="mono">POST /v1/completions</td><td>Optional. Omit unless something needs it — smaller surface, fewer parameters to clamp.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Note the path collision: your existing REST API is already mounted at <code>/v1</code> with <code>/v1/recommendations</code> and friends. OpenAI clients expect <code>/v1/chat/completions</code> specifically, so they can coexist — but it's cleaner to mount the range API at <code>/v1/range/*</code> and reserve <code>/v1/*</code> for the OpenAI-compatible surface. That's a breaking change to the dashboard and OpenAPI spec, which is cheap now and expensive after three clouds are integrated. Decide before Phase 3.</p>
+
+  <h3>Should you just use LiteLLM instead?</h3>
+  <p>Reasonable question — it gives you routing, key management, and budgets out of the box. The argument against: none of it knows what an exercise, a cohort, or an enclave is, and your audit requirement is to join inference records to range telemetry by <code>exercise_id</code> and <code>student_id</code>. You'd end up writing the range-aware layer anyway, and then running two proxies. Since the gateway already exists and already owns the audit vocabulary, extend it. Revisit if you later need multi-provider failover to something off-box.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s9">
+  <h2><span class="n">09</span><span>Structured output on vLLM</span></h2>
+  <p class="lede">This is where the existing design gets a real upgrade rather than a port.</p>
+
+  <p>Today each mode calls the model, validates with ajv, retries once on failure, then falls back. vLLM supports <strong>guided decoding</strong> — constraining generation at the token level against a JSON Schema, so malformed output is structurally impossible rather than merely detected. Feed it the very same schema objects in <code>src/schemas/</code>:</p>
+
+  <pre><code><span class="k">async function</span> callRecommendationModel({ systemPrompt, userPrompt, tier, priorError }) {
+  <span class="k">const</span> res = <span class="k">await</span> fetch(`${tier.baseUrl}/v1/chat/completions`, {
+    method: <span class="s">"POST"</span>,
+    headers: { <span class="s">"content-type"</span>: <span class="s">"application/json"</span> },
+    signal: AbortSignal.timeout(tier.timeoutMs),
+    body: JSON.stringify({
+      model: tier.model,
+      temperature: tier.temperature,
+      max_tokens: <span class="s">512</span>,
+      messages: [
+        { role: <span class="s">"system"</span>, content: systemPrompt },
+        { role: <span class="s">"user"</span>, content: priorError
+            ? `${userPrompt}\n\nPrevious attempt was invalid: ${priorError}`
+            : userPrompt },
+      ],
+      <span class="c">// same object ajv validates against — one source of truth</span>
+      response_format: {
+        type: <span class="s">"json_schema"</span>,
+        json_schema: { name: <span class="s">"recommend_intervention"</span>,
+                       schema: guidedRecommendationSchema, strict: <span class="k">true</span> },
+      },
+    }),
+  });
+  <span class="k">if</span> (!res.ok) <span class="k">throw new</span> Error(`vllm ${res.status}: ${<span class="k">await</span> res.text()}`);
+  <span class="k">const</span> body = <span class="k">await</span> res.json();
+  <span class="k">return</span> JSON.parse(body.choices[<span class="s">0</span>].message.content);
+}</code></pre>
+
+  <p><strong>Keep the ajv validation and the fallback anyway.</strong> Guided decoding guarantees the shape, not the semantics — the model can still emit a well-formed recommendation with a <code>target_id</code> that doesn't exist in the scenario graph, which is precisely what <code>targetExistsInScenario()</code> already catches. Belt and braces, and the fallback path stops being the common case.</p>
+
+  <div class="note crit">
+    <span class="tag">Your recommendation schema needs restructuring first</span>
+    <p><code>recommendation-output</code> uses JSON Schema <code>if</code>/<code>then</code>/<code>else</code> to require <code>target_id</code> for every type except <code>no_action</code>. Grammar backends implement a subset of JSON Schema and conditional keywords are generally not in it — the schema will likely be rejected or silently ignored at compile time. Restructure the guided variant as a <code>oneOf</code> of two concrete branches (a <code>no_action</code> object and a with-<code>target_id</code> object), keep the current <code>if</code>/<code>then</code>/<code>else</code> schema for ajv validation, and assert in a unit test that any object valid under one is valid under the other. Verify against your pinned vLLM build early — this is a Phase 3 blocker if it's discovered late.</p>
+  </div>
+
+  <p>Two smaller notes. Guided decoding costs a grammar compile on first use per schema; it's cached, so warm the four schemas at gateway startup rather than paying it inside a student-visible request. And the report path stays unconstrained — it's narrative output, correctly so.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s10">
+  <h2><span class="n">10</span><span>The adaptation lab</span></h2>
+  <p class="lede">Your stated core mission requirement — students adapting models — is the part of this build that most benefits from owning the hardware, and vLLM has a feature that makes the loop genuinely tight.</p>
+
+  <p>vLLM can load and unload LoRA adapters at runtime against an already-resident base model. With <code>--enable-lora</code> and <code>VLLM_ALLOW_RUNTIME_LORA_UPDATING=1</code>, a student's adapter becomes a servable model in seconds, without a restart and without a second copy of the 8 B base in VRAM. That turns "fine-tune a model" from a batch job into a lab a student can iterate on inside one session:</p>
+
+  <ol>
+    <li>Student prepares a dataset in the enclave and submits a training run.</li>
+    <li><code>lora-train@&lt;run-id&gt;</code> starts, systemd stops the 24 B electives (§4), training gets ~50 GB on GPU 1.</li>
+    <li>Adapter lands in <code>/srv/airange/adapters/&lt;cohort&gt;/&lt;student&gt;/&lt;run-id&gt;/</code>.</li>
+    <li>Instructor (or an automated hook) loads it into <code>vllm-lora</code> via the gateway's admin route.</li>
+    <li>It appears in that enclave's model picker, scoped to that student or cohort, and they chat with what they built.</li>
+    <li>Electives restart when the run finishes.</li>
+  </ol>
+
+  <p>Granite 3.3 8B is the right base — LoRA on an 8 B model at modest sequence length fits comfortably in the freed budget and trains fast enough for a class period. Your OLMo 2 7B alternate is a genuinely good call for courses that examine training data provenance, and it drops into the same slot without changing anything structural.</p>
+
+  <h4>Guardrails</h4>
+  <ul>
+    <li><strong>Per-student disk quota</strong> on the adapter tree. Checkpoints are large and students will forget to clean up.</li>
+    <li><strong>Adapters are untrusted.</strong> Serve them only from the isolated <code>vllm-lora</code> process, scoped so a student's adapter is visible to that student, their cohort, and instructors — never range-wide by default.</li>
+    <li><strong>Bound the queue.</strong> Only one training run at a time on GPU 1, with a scheduled window. Twelve students each submitting a job in the last ten minutes of class is the predictable failure mode.</li>
+    <li><strong>Audit the adapter load</strong> the same as any other inference config change — who loaded which adapter, when, from which run.</li>
+    <li><strong>Cap <code>--max-lora-rank</code></strong> to bound per-adapter memory, and <code>--max-loras</code> to bound how many are resident at once.</li>
+  </ul>
+</section>
+
+<!-- ===================================================== -->
+<section id="s11">
+  <h2><span class="n">11</span><span>GitOps convergence</span></h2>
+  <p class="lede">ansible-pull on a 30-minute timer is the right pattern for one hardened box with no inbound management path. Three things about it need explicit design or it will cause outages.</p>
+
+  <h3>Problem one: converge must not restart the models</h3>
+  <p>A naive handler chain means any change touching a vLLM template restarts a container that takes minutes to reload 61 GB of weights and drops every in-flight student stream. On a 30-minute timer that is a recurring, unattended, mid-class outage.</p>
+
+  <p>Gate it. Disruptive changes require an explicit flag, so the default converge is always safe:</p>
+  <pre><code><span class="c"># group_vars/tower.yml</span>
+ai_range_allow_disruptive: <span class="k">false</span>     <span class="c"># flipped in a merge request for a window</span>
+
+<span class="c"># roles/vllm/handlers/main.yml</span>
+- name: restart vllm units
+  ansible.builtin.systemd:
+    name: <span class="s">"{{ item }}"</span>
+    state: restarted
+    daemon_reload: <span class="k">true</span>
+  loop: <span class="s">"{{ vllm_units }}"</span>
+  when: ai_range_allow_disruptive | bool
+
+- name: warn that a restart is pending
+  ansible.builtin.debug:
+    msg: <span class="s">"Unit files changed; restart deferred. Set ai_range_allow_disruptive."</span>
+  when: not (ai_range_allow_disruptive | bool)</code></pre>
+  <p>Write a marker file when a restart is deferred and expose it through node_exporter's textfile collector, so "tower has pending changes" is a dashboard state rather than tribal knowledge. Everything non-disruptive — nginx config, gateway env, corpus sync, quota tables, allowlists — converges freely every 30 minutes.</p>
+
+  <h3>Problem two: what the tower actually tracks</h3>
+  <p>Pointing ansible-pull at <code>main</code> means any merged commit reaches production within 30 minutes. Point it at a <code>deploy</code> branch that only advances by an explicit, reviewed fast-forward. Engineers commit to <code>main</code> freely; promotion to the tower is a separate, deliberate act.</p>
+  <pre><code>[Unit]
+Description=Converge AI-Range tower from GitLab
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ansible-pull \
+  -U https://gitlab.internal.range/ai-range/tower.git \
+  -C deploy \
+  --accept-host-key \
+  -i localhost, \
+  --vault-password-file /etc/ansible/.vault-pass \
+  site.yml
+ExecStartPost=/usr/local/bin/write-converge-status.sh $EXIT_STATUS</code></pre>
+
+  <div class="note">
+    <span class="tag">Secrets</span>
+    <p>The deploy token is read-only, which protects the repo — it does nothing for what's <em>in</em> the repo. API keys, DB passwords, and the Open WebUI OIDC client secret go in <code>ansible-vault</code>. The vault password file itself is the one thing that cannot come from Git: provision <code>/etc/ansible/.vault-pass</code> (root, <code>0400</code>) during kickstart or first boot. Ansible templates them into systemd <code>EnvironmentFile</code>s at <code>0400</code>, and no secret ever lands in a quadlet file, a container image, or <code>podman inspect</code>.</p>
+  </div>
+
+  <h3>Problem three: silent convergence failure</h3>
+  <p>A failed or half-completed run leaves the box in an undefined state with nobody watching. <code>ExecStartPost</code> writes a status file with exit code and timestamp; node_exporter scrapes it; alert on <strong>"last successful converge older than 90 minutes"</strong> — three missed cycles. Add <code>OnFailure=</code> on the timer unit to a notification path that works without internet.</p>
+
+  <h3>Repository layout</h3>
+  <pre><code>tower.git/
+  site.yml
+  inventory/host_vars/tower.yml
+  group_vars/
+    all.yml               <span class="c"># image digests, paths, retention</span>
+    tower.yml             <span class="c"># ACTIVE MODEL SET — the thing that changes most</span>
+    vault.yml             <span class="c"># ansible-vault encrypted</span>
+  roles/
+    stig_overlay/         <span class="c"># post-STIG deltas the stack needs (booleans, cache dirs)</span>
+    nvidia/               <span class="c"># driver, MOK signing hook, CDI regeneration</span>
+    storage/              <span class="c"># LUKS, LVM RAID1, mounts, quotas</span>
+    podman_base/          <span class="c"># rootless users, lingering, registry auth</span>
+    vllm/                 <span class="c"># one templated quadlet per active model</span>
+    gateway/
+    open_webui/           <span class="c"># looped per enclave</span>
+    ingress/              <span class="c"># nginx, per-VLAN server blocks, certs</span>
+    observability/
+    corpus/               <span class="c"># RAG content sync + reindex trigger</span>
+  files/models.lock.yml   <span class="c"># model name → path → sha256 → license</span></code></pre>
+  <p><code>models.lock.yml</code> is worth calling out: it makes "which weights are on this box, from where, under what license" a reviewable artifact in Git rather than a filesystem archaeology exercise. On an Apache-2.0-only model set that's an easy compliance story — keep it that way deliberately.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s12">
+  <h2><span class="n">12</span><span>HWIL and multi-tenancy</span></h2>
+  <p class="lede">One physical box serving several enterprise clouds means tenant isolation is a property of the design, not of a config field.</p>
+
+  <h3>Network</h3>
+  <p>Bring each enclave in on its own tagged VLAN sub-interface with its own IP, its own firewalld zone, and its own nginx server block and TLS certificate. Default-deny everywhere; the only permitted inbound is 443 per enclave interface plus the control-plane path. No egress. Students never address the tower directly — they reach the nginx vhost on their enclave's network, and nothing else on the box is routable from a student network.</p>
+
+  <p>Have each enclave's ingress present a client certificate, or terminate an mTLS tunnel from the range broker. Combined with the per-enclave Open WebUI token (§6), the gateway can then establish tenancy from three independent signals before it looks at the user's JWT.</p>
+
+  <h3>The isolation ledger</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Resource</th><th>Isolation</th><th>Rationale</th></tr></thead>
+    <tbody>
+      <tr><td>Chat history</td><td><b>Per enclave</b></td><td>Separate Open WebUI instance and database. Never shared.</td></tr>
+      <tr><td>RAG index</td><td><b>Per enclave</b></td><td>Separate Chroma volume. Course content may itself be enclave-specific.</td></tr>
+      <tr><td>Model weights</td><td>Shared, read-only</td><td>Immutable, checksummed, no tenant data. Safe to share.</td></tr>
+      <tr><td>KV cache</td><td>Shared process</td><td><em>Accept with eyes open</em> — see below.</td></tr>
+      <tr><td>Student LoRA adapters</td><td><b>Per cohort</b></td><td>Isolated <code>vllm-lora</code> process; scoped visibility.</td></tr>
+      <tr><td>Audit records</td><td>Shared DB, tenant column</td><td>Central compliance view is the point. Enforce with row-level security.</td></tr>
+      <tr><td>Quota</td><td>Per tenant, then per student</td><td>One enclave's class cannot starve another's.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note crit">
+    <span class="tag">Decide this before the ATO conversation, not during it</span>
+    <p>Enclaves sharing one vLLM process share a KV cache and a batch scheduler. There is no known cross-request data path, but prefix caching does mean timing is data-dependent across tenants, and "different clouds' students share a CUDA context" is a question an assessor will ask. If any enclave sits at a different classification or handles data the others must not see, the answer is not a config flag — it's <strong>separate vLLM processes per classification domain</strong>, which is affordable on GPU 1 and is why the primary chat model gets a dedicated card. Establish the classification model first; the VRAM plan follows from it.</p>
+  </div>
+
+  <h3>Retention</h3>
+  <p>Every student prompt is a training record. Decide now, encode in Ansible: how long transcripts live, who can read them, whether they are exported into the after-action report, and what happens at cohort close-out. Wire the answer into a <code>systemd</code> timer that prunes <code>/srv/airange/transcripts</code> on the policy, so retention is enforced by the machine rather than by intention.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s13">
+  <h2><span class="n">13</span><span>Observability and acceptance tests</span></h2>
+  <p class="lede">Your table's projected numbers become measured numbers here. Design the measurement before Phase 3 so the acceptance criteria are falsifiable.</p>
+
+  <h4>Scrape targets</h4>
+  <ul>
+    <li><strong>vLLM <code>/metrics</code></strong> per instance — time-to-first-token, time-per-output-token, running vs. waiting requests, KV cache utilization, preemption count. <em>Preemptions and KV utilization are the two that predict a bad class</em>: they tell you the batch is oversubscribed before students report slowness.</li>
+    <li><strong>DCGM exporter</strong> — per-GPU utilization, memory, temperature, power. The Max-Q cards are power-limited by design; watch for sustained clock throttling under classroom load.</li>
+    <li><strong>Gateway metrics</strong> — requests by tenant/model/mode, schema-validation failure rate, fallback rate, quota rejections, upstream error rate.</li>
+    <li><strong>node_exporter</strong> plus the converge-status textfile (§11).</li>
+  </ul>
+
+  <p>Two gateway metrics deserve alerts of their own. <strong>Schema fallback rate</strong> — if <code>recommendIntervention</code> starts falling back to <code>no_action</code>, live adaptation has silently stopped working and every exercise still looks healthy. <strong>Prompt-version drift</strong> — if the deployed prompt version doesn't match what the audit records expect, someone changed a prompt without bumping its version, and the provenance guarantee your design is built on is broken.</p>
+
+  <h3>Acceptance tests</h3>
+  <div class="tw"><table>
+    <thead><tr><th>#</th><th>Test</th><th>Pass criterion</th></tr></thead>
+    <tbody>
+      <tr><td class="num">A1</td><td>Single-stream decode, each model, 512-token generation</td><td>Meets or beats the projected tok/s in your model table</td></tr>
+      <tr><td class="num">A2</td><td>Concurrency ramp on gpt-oss-120b: 1 → 40 simultaneous streams</td><td>Per-stream tok/s stays above ~15 (reading speed) at the target class size; record where it breaks</td></tr>
+      <tr><td class="num">A3</td><td>Prefix-cache benefit: 30 requests sharing a system prompt and RAG chunk</td><td>Measurable prefill reduction vs. cache disabled; quantify it</td></tr>
+      <tr><td class="num">A4</td><td>Live-adaptation round trip via the event plane, p95</td><td>Under the configured <code>AI_LIVE_CALL_TIMEOUT_MS</code> with margin</td></tr>
+      <tr><td class="num">A5</td><td>Guided-decoding conformance: 1 000 recommendations against the schema</td><td>Zero ajv failures; fallback rate at 0</td></tr>
+      <tr><td class="num">A6</td><td>Cold start — power on to all models ready</td><td>Documented and bounded; this is your recovery-time objective</td></tr>
+      <tr><td class="num">A7</td><td>Converge under load — ansible-pull during an active class</td><td>No dropped student streams; deferred restarts reported, not applied</td></tr>
+      <tr><td class="num">A8</td><td>Tenant isolation — enclave A requests a model on B's allowlist</td><td>Denied, logged, no cross-tenant history or index visibility</td></tr>
+      <tr><td class="num">A9</td><td>LoRA train + hot-load + serve, end to end</td><td>Fits a class period; electives restore cleanly afterward</td></tr>
+      <tr><td class="num">A10</td><td>Degraded mode — kill vLLM mid-exercise</td><td>Gateway falls back to <code>no_action</code>, exercise continues, chat shows an actionable message</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>A10 matters more than its position suggests. The existing fallback behavior — never let a malformed or missing AI response block an exercise — is the property that makes a single-tower deployment survivable. Test it deliberately, on purpose, before a class discovers it for you.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="s14">
+  <h2><span class="n">14</span><span>Risk register</span></h2>
+
+  <div class="tw"><table>
+    <thead><tr><th>Risk</th><th>Impact</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td><b>Blackwell kernel maturity.</b> <code>sm_120</code> support for MXFP4 MoE and FP8 paths has landed unevenly across vLLM releases.</td><td>Primary chat model won't load or runs far below projection</td><td>Validate in Phase 1 on the exact pinned image, before the model set is committed. Fallback plan: Mistral Small 24B FP8 as primary. Pin by digest.</td></tr>
+      <tr><td><b>Single point of failure.</b> One tower, no HA, for the whole range's AI.</td><td>Every enclave loses AI simultaneously</td><td>Graceful degradation (A10) is the real mitigation. Document a cold-spare procedure; keep weights on portable media; make the RTO explicit and agreed rather than discovered.</td></tr>
+      <tr><td><b>Secure Boot re-signing.</b> Kernel or driver update ships unsigned modules.</td><td>Box returns from patching with no GPUs</td><td>DKMS signing hook in the <code>nvidia</code> role; A6 cold-start test after every patch cycle; alert on <code>nvidia-smi</code> device count.</td></tr>
+      <tr><td><b>FIPS/library incompatibility.</b> MD5 calls in Python dependencies.</td><td>Container fails to start with an opaque error</td><td>Test every image under FIPS in Phase 1; pin digests; keep a patch overlay in the image build.</td></tr>
+      <tr><td><b>Converge-induced outage.</b> 30-minute timer restarts serving mid-class.</td><td>Recurring unattended student-visible outages</td><td><code>ai_range_allow_disruptive</code> gate (§11), <code>deploy</code> branch promotion, A7.</td></tr>
+      <tr><td><b>Cross-tenant exposure</b> through shared inference or a shared index.</td><td>Authorization finding; potential spill</td><td>Per-enclave WebUI and vector store; classification-domain-separated vLLM processes where required; A8.</td></tr>
+      <tr><td><b>Prompt injection via RAG or pasted artifacts.</b> Students paste hostile content by design.</td><td>Assistant behavior steered; worse if any agentic path exists</td><td>No network-capable tools for students; system prompt frames retrieved content as data; never execute model output. Treat any future agentic feature as a new authorization decision.</td></tr>
+      <tr><td><b>Guided-decoding schema rejection.</b> <code>if</code>/<code>then</code>/<code>else</code> unsupported by the grammar backend.</td><td>Structured-output upgrade doesn't work; A5 fails</td><td>Restructure as <code>oneOf</code> now (§9), with an equivalence unit test. Cheap in Phase 0, disruptive in Phase 3.</td></tr>
+      <tr><td><b>Retention and records exposure.</b> Transcripts are student training records.</td><td>Privacy or records-management finding</td><td>Policy decided and encoded in Ansible before first student session, not retrofitted.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ===================================================== -->
+<section id="s15">
+  <h2><span class="n">15</span><span>Phase plan</span></h2>
+  <p class="lede">Ordered so that the highest-uncertainty items — kernel support, FIPS, Secure Boot — are proven before anything depends on them.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Phase</th><th>Scope</th><th>Exit criterion</th></tr></thead>
+    <tbody>
+      <tr><td><b>0 · Foundation</b></td><td>RHEL 9 install, STIG partitioning and hardening, LUKS + LVM RAID1, NVIDIA driver with MOK signing, CDI, FIPS enabled, cache directories redirected. In parallel: restructure the recommendation schema for guided decoding.</td><td><code>nvidia-smi</code> shows both cards after a reboot and a kernel update; a test container reaches both GPUs under SELinux enforcing.</td></tr>
+      <tr><td><b>1 · Prove the stack</b></td><td>One vLLM quadlet (gpt-oss-120b, GPU 0), one Open WebUI, manual config, one enclave. Every image validated under FIPS.</td><td>A student-representative user completes a chat session end to end. A1 measured for the primary model. Go/no-go on the MXFP4 path.</td></tr>
+      <tr><td><b>2 · Make it managed</b></td><td>Ansible repo, ansible-pull timer on <code>deploy</code>, vault secrets, full model set, quadlets for everything, observability, converge-status alerting.</td><td>A change merged to <code>deploy</code> converges within 30 minutes with no manual step. A7 passes.</td></tr>
+      <tr><td><b>3 · Gateway integration</b></td><td>Rewrite the four <code>callXxxModel</code> stubs, chat proxy, upstream registry, real auth, Postgres job store, NATS broker, audit and quota, approval queue, readiness. Full acceptance suite.</td><td>A1–A10 pass and the measured numbers replace the projections in the model table.</td></tr>
+      <tr><td><b>4 · Range integration</b></td><td>All enclaves on VLANs via HWIL, per-enclave WebUI and RAG, course corpus ingest, control-plane event wiring, tenant allowlists and quotas.</td><td>Live-adaptation loop runs against a real exercise across the HWIL link; A8 passes for every enclave pair.</td></tr>
+      <tr><td><b>5 · Adaptation labs</b></td><td>LoRA training units, adapter store with quotas, isolated serving instance, instructor load/unload workflow, the OLMo 2 variant for provenance courses.</td><td>A9 passes with a real cohort inside a class period.</td></tr>
+    </tbody>
+  </table></div>
+
+  <hr class="rule">
+
+  <h3>If you do three things first</h3>
+  <ol>
+    <li><strong>Prove Blackwell + your pinned vLLM + MXFP4 on gpt-oss-120b</strong> before anything else in the plan is committed to. Every capacity number and the whole model table depends on it, and it is the one assumption you cannot design around after the fact.</li>
+    <li><strong>Decide the classification and tenancy model</strong> for the enclaves. It determines whether one vLLM process can serve several clouds, which determines the VRAM plan, which determines how many models you can run at once.</li>
+    <li><strong>Restructure the recommendation schema</strong> for guided decoding, with an ajv-equivalence test. It's an hour of work now and a Phase 3 blocker later.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>Grounded in the current <code>aigatewayservice</code> tree: 15 source files, 4 test suites, an OpenAPI spec, and a Vite/React instructor dashboard. Version-specific claims — vLLM flags, Blackwell kernel coverage, Open WebUI environment variables — should be re-verified against your pinned image digests during Phase 0.</p>
+</footer>
+
+</main>
+</div>

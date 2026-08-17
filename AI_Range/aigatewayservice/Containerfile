@@ -1,0 +1,40 @@
+# UBI 9 Node base rather than a generic node:22 image, so the gateway
+# inherits the tower's RHEL 9 / FIPS-validated crypto stack instead of
+# fighting it - see docs/range-inference-tower.html, "Host build under the
+# RHEL 9 STIG" for why that matters (hashlib/crypto calls that assume
+# non-FIPS behavior are the usual failure mode).
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest AS deps
+
+WORKDIR /opt/app-root/src
+
+COPY package.json package-lock.json ./
+# JOB_STORE_MODE=postgres / EVENT_BROKER_MODE=nats need pg/nats, which are
+# declared as optionalDependencies precisely so this install never hard-
+# fails on a disconnected build host that can't reach either - see
+# package.json. If your registry mirror has them, they're pulled in here;
+# if not, memory-mode still works and you can `npm install pg nats` later.
+RUN npm ci --omit=dev
+
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest
+
+WORKDIR /opt/app-root/src
+COPY --from=deps /opt/app-root/src/node_modules ./node_modules
+COPY package.json ./
+COPY src ./src
+COPY openapi ./openapi
+
+ENV NODE_ENV=production
+# Every cache/tmp path vLLM-adjacent Node tooling might touch gets an
+# explicit, writable, non-noexec home - same reasoning as the vLLM quadlets
+# in docs/range-inference-tower.html ("noexec on /tmp vs Triton kernel
+# compilation"), just for Node's own npm/tmp usage rather than Triton's.
+ENV NPM_CONFIG_CACHE=/tmp/npm-cache
+ENV TMPDIR=/tmp
+
+USER 1001
+EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8080/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "src/server.js"]

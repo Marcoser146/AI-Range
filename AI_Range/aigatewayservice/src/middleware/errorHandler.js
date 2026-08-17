@@ -1,6 +1,6 @@
 "use strict";
 
-/** Every error response takes the shape { error: { code, message } }. */
+/** Every error response comes back shaped as { error: { code, message } }. */
 class ApiError extends Error {
   constructor(status, code, message) {
     super(message);

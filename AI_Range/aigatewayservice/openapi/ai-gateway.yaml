@@ -1,18 +1,26 @@
 openapi: 3.0.3
 info:
   title: AI-Range AI Gateway Service
-  version: 1.0.0
+  version: 2.0.0
   description: >
-    REST surface for the AI Gateway Service that wraps the AI-Range AI
-    decision engine and exposes it to the event plane (timeline engine,
-    scoring engine, EP4 after-action reporting) and to the instructor
-    dashboard. The same underlying engine calls are also reachable
-    automatically via the event-bus adapter (see src/eventAdapter.js);
-    this spec covers the synchronous/on-demand REST path only.
+    REST surface for the AI Gateway Service. Two independent surfaces live
+    at the same /v1 base path, distinguished by which bearer token pool
+    authenticates them (see securitySchemes below):
+
+    - **Range automation** (`/recommendations`, `/assessments`, `/reports*`,
+      `/admin/*`): the range control plane, the event-bus adapter (see
+      src/eventAdapter.js), and the instructor dashboard call into the AI
+      decision engine's four structured modes, authenticated with a named
+      service token (`serviceAuth`).
+    - **Student chat** (`/models`, `/chat/completions`, `/embeddings`): an
+      OpenAI-compatible surface Open WebUI calls on behalf of a student,
+      authenticated with a per-enclave tenant token (`chatAuth`) plus
+      student identity forwarded in `X-OpenWebUI-User-*` headers. This is
+      the only path allowed to reach the tower's vLLM instances, which bind
+      loopback-only - see docs/range-inference-tower.html, "The shape of
+      the system".
 servers:
   - url: http://localhost:8080/v1
-security:
-  - bearerAuth: []
 paths:
   /health:
     get:
@@ -31,9 +39,32 @@ paths:
                   service: { type: string, example: ai-gateway }
                   time: { type: string, format: date-time }
 
+  /ready:
+    get:
+      summary: Readiness check - per-model, not just process liveness
+      description: >
+        Unlike /health (always 200 once the process is up), /ready reports
+        whether the vLLM upstreams behind this gateway are actually
+        answering. Returns 503 until at least one is ready. Point
+        load-balancer/ingress readiness probes here, not at /health.
+      operationId: getReady
+      security: []
+      responses:
+        "200":
+          description: At least one upstream is ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyResponse" }
+        "503":
+          description: No upstream is currently ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyResponse" }
+
   /recommendations:
     post:
       summary: Request a live-adaptation recommendation
+      security: [{ serviceAuth: [] }]
       description: >
         Synchronous call into the AI decision engine's live-adaptation mode.
         Returns a structured recommendation (never free text) produced via
@@ -76,6 +107,7 @@ paths:
         by the scoring engine's AI qualitative assessor. quality_score is a
         capped 0-1 signal; the caller's rubric decides how much it's worth.
       operationId: createAssessment
+      security: [{ serviceAuth: [] }]
       requestBody:
         required: true
         content:
@@ -104,6 +136,7 @@ paths:
         Returns immediately with a job id; poll GET /reports/{jobId} for
         the result.
       operationId: createReport
+      security: [{ serviceAuth: [] }]
       requestBody:
         required: true
         content:
@@ -128,6 +161,7 @@ paths:
     get:
       summary: Poll an after-action report job
       operationId: getReport
+      security: [{ serviceAuth: [] }]
       parameters:
         - in: path
           name: jobId
@@ -147,12 +181,386 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  # ---------------------------------------------------------------------
+  # Student chat (Open WebUI). See src/chatProxy.js. All three require
+  # chatAuth: a per-enclave tenant bearer token, plus student identity
+  # forwarded by Open WebUI in X-OpenWebUI-User-* headers (documented on
+  # the security scheme below, not modeled as OpenAPI parameters since
+  # they're set by Open WebUI itself, never by a hand-written client).
+  # ---------------------------------------------------------------------
+  /models:
+    get:
+      summary: List chat models available to the caller's tenant
+      description: >
+        Only lists models the tenant is allowed to use AND that are
+        currently answering their health check.
+      operationId: listModels
+      security: [{ chatAuth: [] }]
+      responses:
+        "200":
+          description: Model list (OpenAI-compatible shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /chat/completions:
+    post:
+      summary: OpenAI-compatible chat completion
+      description: >
+        Injects the fixed range system prompt (a client-supplied system
+        message is stripped, never honored), clamps temperature/max_tokens,
+        checks quota, and forwards to the resolved vLLM upstream - streamed
+        back untouched when `stream: true`. This is the endpoint Open
+        WebUI's OPENAI_API_BASE_URL points at.
+      operationId: createChatCompletion
+      security: [{ chatAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatCompletionRequest" }
+      responses:
+        "200":
+          description: >
+            Chat completion. When `stream: false`, an OpenAI-compatible JSON
+            body; when `stream: true`, a `text/event-stream` passthrough of
+            the upstream's SSE stream.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatCompletionResponse" }
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /embeddings:
+    post:
+      summary: OpenAI-compatible embeddings (course-content RAG retrieval)
+      operationId: createEmbedding
+      security: [{ chatAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmbeddingRequest" }
+      responses:
+        "200":
+          description: Embedding vector(s)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingResponse" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ---------------------------------------------------------------------
+  # Instructor admin (dashboard, or an "admin"/"instructor"-role chat
+  # request). See src/routes/admin.js.
+  # ---------------------------------------------------------------------
+  /admin/approvals:
+    get:
+      summary: List the instructor approval queue
+      description: >
+        Recommendations eventAdapter.js marked pending_approval - a
+        branch_change/extend_time, or anything below the confidence
+        threshold. Defaults to status=pending_approval.
+      operationId: listApprovals
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      parameters:
+        - in: query
+          name: exercise_id
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending_approval, approved, rejected] }
+      responses:
+        "200":
+          description: Approval queue entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approvals:
+                    type: array
+                    items: { $ref: "#/components/schemas/Approval" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/approvals/{id}:
+    get:
+      summary: Get one approval queue entry
+      operationId: getApproval
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Approval entry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/approvals/{id}/approve:
+    post:
+      summary: Approve a pending recommendation
+      operationId: approveApproval
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated approval entry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already resolved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /admin/approvals/{id}/reject:
+    post:
+      summary: Reject a pending recommendation
+      operationId: rejectApproval
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated approval entry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already resolved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /admin/upstreams:
+    get:
+      summary: Report readiness for every configured model upstream
+      operationId: listUpstreamStatus
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      responses:
+        "200":
+          description: Upstream status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upstreams:
+                    type: array
+                    items: { $ref: "#/components/schemas/UpstreamStatus" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/quota/{studentId}:
+    get:
+      summary: Inspect a student's current quota usage
+      operationId: getQuotaUsage
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      parameters:
+        - in: path
+          name: studentId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tenant
+          schema: { type: string }
+      responses:
+        "200":
+          description: Current usage and configured limits
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaUsage" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/audit:
+    get:
+      summary: Look up recent inference audit records
+      operationId: listAuditEntries
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      parameters:
+        - in: query
+          name: tenant
+          schema: { type: string }
+        - in: query
+          name: student_id
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100 }
+      responses:
+        "200":
+          description: Audit entries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/lora/load:
+    post:
+      summary: Hot-load a student LoRA adapter into the isolated LoRA upstream
+      description: >
+        See "The adaptation lab" in docs/range-inference-tower.html. Calls
+        vLLM's /v1/load_lora_adapter on the configured LoRA base upstream,
+        then registers the adapter in the model registry under `name` so it
+        appears in GET /models.
+      operationId: loadLoraAdapter
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, path]
+              properties:
+                name: { type: string, description: "Served model name for the loaded adapter." }
+                path: { type: string, description: "Filesystem path to the adapter, under /srv/airange/adapters." }
+      responses:
+        "200":
+          description: Adapter loaded and registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  loaded: { type: string }
+                  baseUrl: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /admin/lora/unload:
+    post:
+      summary: Unload a previously loaded student LoRA adapter
+      operationId: unloadLoraAdapter
+      security: [{ serviceAuth: [] }, { chatAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: Adapter unloaded and unregistered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unloaded: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
 components:
   securitySchemes:
-    bearerAuth:
+    serviceAuth:
       type: http
       scheme: bearer
-      description: Static shared-secret bearer token (AI_GATEWAY_API_KEY). Swap for real secret management in production.
+      description: >
+        Named service token (range control plane, instructor dashboard) -
+        config.services in src/config.js. AI_GATEWAY_API_KEY is the
+        "control-plane" token, kept for backward compatibility with the
+        single-shared-secret setup this started as.
+    chatAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Static per-enclave tenant token (config.tenants) identifying which
+        Open WebUI instance a request came from. Student identity is
+        additionally required via forwarded headers, set by Open WebUI when
+        ENABLE_FORWARD_USER_INFO_HEADERS=true - not modeled here as OpenAPI
+        parameters since a hand-written client never sets them directly:
+          X-OpenWebUI-User-Id (required), X-OpenWebUI-User-Email,
+          X-OpenWebUI-User-Name, X-OpenWebUI-User-Role.
 
   responses:
     BadRequest:
@@ -172,6 +580,21 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
     NotFound:
       description: Resource does not exist
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    TooManyRequests:
+      description: Quota exceeded (token budget or concurrent-stream cap) - see error.code
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    BadGateway:
+      description: The upstream model server returned an error or was unreachable
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    ServiceUnavailable:
+      description: The requested model is configured but not currently ready
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -317,3 +740,152 @@ components:
         error: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time, nullable: true }
+
+    ReadyResponse:
+      type: object
+      properties:
+        ready: { type: boolean, description: "True if at least one upstream is ready." }
+        upstreams:
+          type: array
+          items: { $ref: "#/components/schemas/UpstreamStatus" }
+
+    UpstreamStatus:
+      type: object
+      properties:
+        id: { type: string, example: gpt-oss-120b }
+        baseUrl: { type: string }
+        servedModelName: { type: string }
+        ready: { type: boolean }
+
+    ModelList:
+      type: object
+      description: OpenAI-compatible model list.
+      properties:
+        object: { type: string, enum: [list] }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, example: gpt-oss-120b }
+              object: { type: string, enum: [model] }
+              owned_by: { type: string, example: ai-range }
+              created: { type: integer }
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant] }
+        content: { type: string }
+
+    ChatCompletionRequest:
+      type: object
+      description: >
+        OpenAI Chat Completions request shape. Any `system` message is
+        stripped and replaced with the fixed range system prompt - see
+        src/chatProxy.js.
+      required: [model, messages]
+      properties:
+        model: { type: string, example: gpt-oss-120b }
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/ChatMessage" }
+        stream: { type: boolean, default: false }
+        temperature: { type: number, minimum: 0 }
+        max_tokens: { type: integer, minimum: 1 }
+
+    ChatCompletionResponse:
+      type: object
+      description: OpenAI Chat Completions response shape (non-streaming), passed through as vLLM returns it.
+      properties:
+        id: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              message: { $ref: "#/components/schemas/ChatMessage" }
+              finish_reason: { type: string }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
+
+    EmbeddingRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          description: A string or array of strings to embed.
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+
+    EmbeddingResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              embedding:
+                type: array
+                items: { type: number }
+        usage:
+          type: object
+          properties:
+            total_tokens: { type: integer }
+
+    Approval:
+      type: object
+      description: >
+        A recommendation eventAdapter.js routed to pending_approval instead
+        of auto-applying - see src/store/approvalStore.js.
+      properties:
+        approval_id: { type: string, format: uuid }
+        exercise_id: { type: string }
+        student_id: { type: string }
+        recommendation_type: { type: string }
+        target_id: { type: string, nullable: true }
+        confidence: { type: number }
+        rationale: { type: string }
+        reason: { type: string, description: "Why this went to the queue - see decideApproval() in eventAdapter.js." }
+        prompt_version: { type: string }
+        status: { type: string, enum: [pending_approval, approved, rejected] }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        resolved_by: { type: string, nullable: true }
+
+    QuotaUsage:
+      type: object
+      properties:
+        studentTokensThisHour: { type: integer }
+        tenantTokensThisHour: { type: integer }
+        activeStreams: { type: integer }
+        limits:
+          type: object
+          properties:
+            tokensPerHourPerStudent: { type: integer }
+            tokensPerHourPerTenant: { type: integer }
+            maxConcurrentStreamsPerStudent: { type: integer }
+
+    AuditEntry:
+      type: object
+      description: One inference call - see src/audit.js.
+      properties:
+        tenant: { type: string }
+        studentId: { type: string, nullable: true }
+        mode: { type: string, enum: [chat, embedding, recommendation, assessment, capacity_analytics, report] }
+        model: { type: string }
+        promptTokens: { type: integer, nullable: true }
+        completionTokens: { type: integer, nullable: true }
+        latencyMs: { type: integer, nullable: true }
+        finishReason: { type: string, nullable: true }
+        promptVersion: { type: string, nullable: true }
+        recorded_at: { type: string, format: date-time }

@@ -58,7 +58,7 @@ export function ReportPanel({ config }: { config: ApiConfig }) {
 
   return (
     <div className="panel">
-      <h2>After-Action Report (EP4)</h2>
+      <h2>After-Action Report</h2>
       <form onSubmit={handleSubmit}>
         <div className="field-row">
           <label>

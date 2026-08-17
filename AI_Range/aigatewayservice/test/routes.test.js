@@ -101,7 +101,7 @@ test("POST /v1/reports starts a job and GET /v1/reports/:id resolves it", async 
   assert.ok(created.body.job_id);
   assert.equal(created.body.status, "pending");
 
-  // report generation resolves asynchronously - poll briefly
+  // report generation is async, so poll for a bit until it's done
   let job;
   for (let i = 0; i < 20; i += 1) {
     const polled = await request(app).get(`/v1/reports/${created.body.job_id}`).set(AUTH);

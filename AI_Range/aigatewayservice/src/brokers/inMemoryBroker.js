@@ -1,14 +1,14 @@
 "use strict";
 
 /**
- * inMemoryBroker.js — DEV/TEST ONLY.
+ * inMemoryBroker.js - dev/test only, not for production.
  *
- * Minimal pub-sub satisfying the { subscribe(topic, handler), publish(topic,
- * event) } interface that eventAdapter.js depends on. Swap this out for a
- * real client in production; eventAdapter.js does not change either way
- * because it only ever calls these two methods.
+ * A minimal pub-sub that satisfies the { subscribe(topic, handler),
+ * publish(topic, event) } interface eventAdapter.js depends on. Swap it out
+ * for a real client in production - eventAdapter.js won't need to change
+ * either way, since it only ever calls these two methods.
  *
- * Mapping notes for real brokers:
+ * Notes on mapping this to a real broker:
  *   - Kafka:    subscribe -> kafkaConsumer.on('message', ...) per topic
  *                            (topic == Kafka topic, or a shared topic with
  *                            event-type routing on the "event" field)
@@ -21,7 +21,7 @@
 class InMemoryBroker {
   constructor() {
     this._handlers = new Map(); // topic -> Set<handler>
-    this._published = []; // audit trail for tests/inspection
+    this._published = []; // keeps everything published, so tests can inspect it
   }
 
   subscribe(topic, handler) {
@@ -34,8 +34,8 @@ class InMemoryBroker {
     this._published.push({ topic, event, publishedAt: new Date().toISOString() });
     const handlers = this._handlers.get(topic);
     if (!handlers) return;
-    // Fire handlers concurrently but don't let one subscriber's failure
-    // break another's, or break the publisher.
+    // Run handlers concurrently, and don't let one subscriber blowing up
+    // take down the others or the publisher.
     await Promise.all(
       [...handlers].map((handler) =>
         Promise.resolve()

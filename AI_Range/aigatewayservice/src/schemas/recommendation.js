@@ -1,8 +1,8 @@
 // Mirrors the `recommend_intervention` tool schema the AI decision engine is
-// forced to respond through during live adaptation. Kept here (not inline in
-// aiEngineClient.js) so the timeline engine's REST/event contract and the
-// model's tool-use contract can never silently drift apart - one file, one
-// source of truth for "what a recommendation looks like".
+// forced to respond through during live adaptation. It lives here instead
+// of inline in aiEngineClient.js so the timeline engine's REST/event
+// contract and the model's tool-use contract can't quietly drift apart -
+// one file, one source of truth for what a recommendation looks like.
 const RECOMMENDATION_TYPES = [
   "inject_hint",
   "difficulty_adjust",
@@ -22,15 +22,17 @@ const recommendationOutputSchema = {
     rationale: { type: "string", minLength: 1 },
   },
   required: ["recommendation_type", "confidence", "rationale"],
-  // target_id is required for every type except no_action
+  // every type requires target_id except no_action, which must not carry
+  // one at all (a target_id on a no_action recommendation is a modeling
+  // error worth catching, not just noise to ignore).
   if: {
     properties: { recommendation_type: { const: "no_action" } },
   },
-  then: {},
+  then: { not: { required: ["target_id"] } },
   else: { required: ["target_id"] },
 };
 
-// Request body for POST /v1/recommendations
+// request body for POST /v1/recommendations
 const recommendationRequestSchema = {
   $id: "recommendation-request",
   type: "object",

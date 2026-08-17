@@ -1,7 +1,7 @@
-// Request body for POST /v1/reports (EP4 after-action report generation).
-// This path is async - see src/store/jobStore.js - so there is no output
-// schema here, only the request shape. The engine's narrative output is
-// stored as free-form markdown/text in the job record.
+// Request body for POST /v1/reports (EP4, after-action report generation).
+// This path is async (see src/store/jobStore.js), so there's no output
+// schema here, just the request shape. The engine's narrative output ends
+// up stored as free-form markdown/text in the job record.
 const reportRequestSchema = {
   $id: "report-request",
   type: "object",

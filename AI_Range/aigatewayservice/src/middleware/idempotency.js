@@ -2,16 +2,16 @@
 
 /**
  * Optional Idempotency-Key support for POST endpoints that trigger a model
- * call. If a client retries a request (e.g. after a timeout) with the same
- * key, they get back the cached response instead of triggering a second
- * (possibly divergent) AI call.
+ * call. If a client retries the same request (say, after a timeout) with
+ * the same key, they get the cached response back instead of triggering a
+ * second, possibly different, AI call.
  *
- * In-memory + TTL only — fine for a single gateway instance behind a
- * load balancer with sticky routing; back this with Redis (or similar) once
- * you run more than one replica.
+ * This is in-memory with a TTL, which is fine for a single gateway instance
+ * behind a load balancer with sticky routing. Once you're running more than
+ * one replica, back it with Redis or similar instead.
  */
 function createIdempotencyStore(ttlMs = 10 * 60 * 1000) {
-  const store = new Map(); // key -> { status, body, expiresAt }
+  const store = new Map(); // keyed by idempotency key -> { status, body, expiresAt }
 
   function sweep() {
     const now = Date.now();

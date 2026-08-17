@@ -1,36 +1,56 @@
 "use strict";
 
-/**
- * aiEngineClient.js — THE ONE FILE YOU EDIT TO INTEGRATE YOUR AI ENGINE.
- *
- * Nothing else in this service (routes.js, eventAdapter.js, server.js) knows
- * or cares what your engine is, how it's hosted, or which model(s) it calls.
- * They only ever call the four functions exported at the bottom of this
- * file: recommendIntervention(), assessActionQuality(),
- * evaluateResourceNeeds(), and generateAfterActionReport(). Swap the four
- * `callXxxModel()` stub bodies below for real calls into your engine (SDK
- * call, internal HTTP call, subprocess, whatever) and the rest of the
- * gateway needs no changes.
- *
- * Everything in this file enforces the guardrails described in the design:
- *   - fixed, versioned system prompts (never exercise-specific rules)
- *   - tool-forced structured output, validated against a JSON schema
- *   - one retry with the validation error appended, then a safe fallback
- *   - prompt/schema version stamped on every result for the audit trail
+/*
+  This is the one file you actually need to touch to wire up a real AI
+  engine.
+
+  Nothing else in the service (routes.js, eventAdapter.js, server.js) knows
+  or cares what your engine is, how it's hosted, or which model it calls.
+  They only ever talk to the four functions exported at the bottom of this
+  file: recommendIntervention(), assessActionQuality(),
+  evaluateResourceNeeds(), and generateAfterActionReport(). Swap the four
+  callXxxModel() stub bodies below for real calls into your engine (an SDK
+  call, an internal HTTP call, a subprocess, whatever fits your setup) and
+  nothing else in the gateway needs to change.
+
+  A few guardrails are baked into this file on purpose:
+    - system prompts are fixed and versioned, never exercise-specific
+    - output is tool-forced and validated against a JSON schema
+    - if validation fails, we retry once with the error appended, then fall
+      back to something safe
+    - every result gets stamped with whatever prompt/schema version
+      produced it, so we can always trace back why the AI suggested
+      something
  */
 
 const { validate } = require("./schemas/validator");
 const { RECOMMENDATION_TYPES } = require("./schemas/recommendation");
 const { QUALITY_DIMENSIONS } = require("./schemas/assessment");
 const { RESOURCE_TYPES } = require("./schemas/resourceRequest");
+const {
+  guidedRecommendationOutputSchema,
+  guidedResourceRequestOutputSchema,
+  guidedAssessmentOutputSchema,
+} = require("./schemas/guided");
 const config = require("./config");
 
-// ---------------------------------------------------------------------------
-// Versioned, static system prompts. Bump the version string any time the
-// text changes - every recommendation/assessment/report is stamped with
-// whichever version produced it, so "why did the AI suggest this three weeks
-// ago" is always answerable.
-// ---------------------------------------------------------------------------
+// Overridable HTTP layer, so this file (and anything that calls it) is
+// exercisable in tests/dev without a live vLLM instance - the same
+// "runnable and testable before the real engine is wired in" property the
+// old hardcoded stubs gave for free. Production never touches this; it's
+// only ever set by test/aiEngineClient.test.js.
+let fetchImpl = (...args) => fetch(...args);
+function __setFetchImpl(fn) {
+  fetchImpl = fn;
+}
+function __resetFetchImpl() {
+  fetchImpl = (...args) => fetch(...args);
+}
+
+// Static, versioned system prompts. Bump the version string whenever the
+// wording changes. Every recommendation, assessment, and report gets
+// stamped with whichever version produced it, so "why did the AI suggest
+// this three weeks ago" is always answerable.
 
 const LIVE_ADAPTATION_SYSTEM_PROMPT_VERSION = "live-adaptation@1.0.0";
 const LIVE_ADAPTATION_SYSTEM_PROMPT = `
@@ -108,74 +128,155 @@ Rules:
 - Keep the narrative organized by objective, then by overall exercise flow.
 `.trim();
 
-// ---------------------------------------------------------------------------
-// Model tier / call-shape config per mode. Live adaptation is optimized for
-// latency (small context, low temperature, small/fast model); reporting and
-// assessment tolerate more latency and benefit from a larger model.
-// ---------------------------------------------------------------------------
+// Per-mode model config. Live adaptation has to be fast (small context, low
+// temperature, a small/quick model); reporting and assessment can tolerate
+// more latency and benefit from a bigger model doing more reasoning.
+//
+// Which logical model backs each mode comes from config.modelTiers (env
+// var per mode); where that model actually lives (baseUrl, served name)
+// comes from config.upstreams (the "active model set is configuration, not
+// code" registry - see src/config.js and src/upstreams.js). Resolving both
+// here, once, keeps every call site below oblivious to either.
+function resolveTier(logicalName, { temperature, timeoutMs }) {
+  const upstream = config.upstreams[logicalName];
+  if (!upstream) {
+    throw new Error(
+      `[ai-gateway] aiEngineClient: no upstream configured for model "${logicalName}" - ` +
+        `check config.modelTiers / config.upstreams (UPSTREAMS_JSON, AI_MODEL_* env vars).`
+    );
+  }
+  return {
+    model: logicalName,
+    servedModelName: upstream.servedModelName,
+    baseUrl: upstream.baseUrl,
+    guidedDecoding: Boolean(upstream.guidedDecoding),
+    temperature,
+    timeoutMs,
+  };
+}
 
 const MODEL_TIERS = {
-  liveAdaptation: {
-    // e.g. a fast/small model - tune to your latency budget.
-    model: process.env.AI_MODEL_LIVE || "fast-tier",
+  liveAdaptation: resolveTier(config.modelTiers.liveAdaptation, {
     temperature: 0,
     timeoutMs: config.liveCallTimeoutMs,
-  },
-  assessment: {
-    model: process.env.AI_MODEL_ASSESSMENT || "reasoning-tier",
+  }),
+  assessment: resolveTier(config.modelTiers.assessment, {
     temperature: 0.2,
     timeoutMs: config.reportCallTimeoutMs,
-  },
-  capacityAnalytics: {
-    // Runs on the same telemetry cadence as live adaptation, so it gets the
-    // same fast/cheap tier rather than the reasoning tier.
-    model: process.env.AI_MODEL_CAPACITY || "fast-tier",
+  }),
+  capacityAnalytics: resolveTier(config.modelTiers.capacityAnalytics, {
+    // Fires on the same telemetry cadence as live adaptation, so it gets the
+    // same cheap/fast tier and the live-call timeout, not the report one.
     temperature: 0,
     timeoutMs: config.liveCallTimeoutMs,
-  },
-  report: {
-    // e.g. a larger/deeper-reasoning model - runs once, at exercise end.
-    model: process.env.AI_MODEL_REPORT || "reasoning-tier",
+  }),
+  report: resolveTier(config.modelTiers.report, {
     temperature: 0.4,
     timeoutMs: config.reportCallTimeoutMs,
-  },
+  }),
 };
 
-// ---------------------------------------------------------------------------
-// INTEGRATION POINT 1 of 4: live adaptation.
+// --- The one place that actually talks to vLLM's OpenAI-compatible API ----
+//
+// Every callXxxModel() below builds a system/user prompt pair and calls
+// this. It POSTs to {baseUrl}/v1/chat/completions, optionally constraining
+// the model's output to a JSON Schema via guided decoding
+// (response_format), and returns the parsed message content.
+//
+// Deliberately does NOT catch/convert errors for the report path (the
+// caller lets them propagate to routes.js's jobStore.fail()). The three
+// structured modes (recommendation/resource/assessment) DO catch here and
+// return an object that will fail its ajv check - see the try/catch in
+// each callXxxModel below - so a network failure flows through the exact
+// same retry-then-fallback path as a malformed model response, and none of
+// recommendIntervention/evaluateResourceNeeds/assessActionQuality need to
+// know the difference.
+async function postChatCompletion({
+  baseUrl,
+  servedModelName,
+  systemPrompt,
+  userPrompt,
+  temperature,
+  timeoutMs,
+  maxTokens,
+  jsonSchema, // { name, schema } | undefined - omit for free-form (report) output
+}) {
+  const body = {
+    model: servedModelName,
+    temperature,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  };
+  if (jsonSchema) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: { name: jsonSchema.name, schema: jsonSchema.schema, strict: true },
+    };
+  }
+
+  const res = await fetchImpl(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`vLLM ${baseUrl} returned ${res.status}: ${text.slice(0, 500)}`);
+  }
+
+  const payload = await res.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || content.length === 0) {
+    throw new Error(`vLLM ${baseUrl} returned no message content`);
+  }
+  return content;
+}
+
+async function postStructuredChatCompletion(args) {
+  const content = await postChatCompletion(args);
+  try {
+    return JSON.parse(content);
+  } catch (err) {
+    throw new Error(`vLLM ${args.baseUrl} returned non-JSON content: ${err.message}`);
+  }
+}
+
+// --- Integration point 1 of 4: live adaptation ----------------------------
 //
 // Replace the body of callRecommendationModel() with a call into your real
-// engine. It must return an object matching the recommend_intervention tool
-// schema (src/schemas/recommendation.js) - if your engine already does
-// tool-forced structured output, just adapt its response shape here.
+// engine. It just needs to return something matching the
+// recommend_intervention tool schema (src/schemas/recommendation.js) - if
+// your engine already does tool-forced structured output, you're probably
+// just reshaping its response here.
 // ---------------------------------------------------------------------------
 async function callRecommendationModel({ systemPrompt, userPrompt, tier, priorError }) {
-  // ---- STUB (replace me) -------------------------------------------------
-  // A real implementation calls your engine, e.g.:
-  //
-  //   const result = await myEngine.run({
-  //     system: systemPrompt,
-  //     input: userPrompt,
-  //     model: tier.model,
-  //     temperature: tier.temperature,
-  //     timeoutMs: tier.timeoutMs,
-  //     tool: RECOMMEND_INTERVENTION_TOOL_SCHEMA,
-  //     retryContext: priorError,
-  //   });
-  //   return result.toolCall.input;
-  //
-  // The deterministic stub below exists only so this service is runnable
-  // and testable before you've wired in the real engine.
-  void systemPrompt;
-  void userPrompt;
-  void tier;
-  void priorError;
-  return {
-    recommendation_type: "no_action",
-    confidence: 0.5,
-    rationale: "Stub engine: no live model wired in yet (see aiEngineClient.js).",
-  };
-  // ---- END STUB ------------------------------------------------------------
+  try {
+    return await postStructuredChatCompletion({
+      baseUrl: tier.baseUrl,
+      servedModelName: tier.servedModelName,
+      systemPrompt,
+      userPrompt: priorError ? `${userPrompt}\n\nPrevious attempt was invalid: ${priorError}` : userPrompt,
+      temperature: tier.temperature,
+      timeoutMs: tier.timeoutMs,
+      maxTokens: 512,
+      jsonSchema: tier.guidedDecoding
+        ? { name: "recommend_intervention", schema: guidedRecommendationOutputSchema }
+        : undefined,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[aiEngineClient] recommendation call failed:", err.message);
+    // Return something that will fail ajv validation, so this flows through
+    // the exact same retry-then-no_action-fallback path as a malformed
+    // model response - recommendIntervention() doesn't need to know a
+    // network error and a bad model response are different things.
+    return {};
+  }
 }
 
 function buildLiveAdaptationPrompt({ snapshot, scenarioConstraints, recentRecommendations }) {
@@ -183,9 +284,10 @@ function buildLiveAdaptationPrompt({ snapshot, scenarioConstraints, recentRecomm
     {
       state_snapshot: snapshot,
       scenario_constraints: scenarioConstraints || {},
-      // Only the last few recommendations, not full exercise history - this
-      // keeps latency/cost flat regardless of exercise length, and lets the
-      // model avoid repeating something already rejected.
+      // Only send the last few recommendations, not the full exercise
+      // history - keeps latency/cost flat no matter how long the exercise
+      // runs, and gives the model enough to avoid repeating something
+      // already rejected.
       recent_recommendations: (recentRecommendations || []).slice(-5),
       valid_recommendation_types: RECOMMENDATION_TYPES,
     },
@@ -195,9 +297,9 @@ function buildLiveAdaptationPrompt({ snapshot, scenarioConstraints, recentRecomm
 }
 
 /**
- * Live-adaptation call: given a current exercise state snapshot, decide
- * whether to intervene. Called on state transitions / throttled interval by
- * eventAdapter.js, or synchronously via POST /v1/recommendations.
+ * Given a current exercise state snapshot, decide whether to intervene.
+ * Called on state transitions (throttled) by eventAdapter.js, or directly
+ * via POST /v1/recommendations.
  *
  * @returns {Promise<{recommendation: object, promptVersion: string, schemaVersion: string, attempts: number}>}
  */
@@ -225,7 +327,8 @@ async function recommendIntervention({
     return finalizeRecommendation(attempt1, 1);
   }
 
-  // One retry, with the validation error appended so the model can self-correct.
+  // Give it one more shot, with the validation error appended so it has a
+  // chance to self-correct.
   const attempt2 = await callRecommendationModel({
     systemPrompt: LIVE_ADAPTATION_SYSTEM_PROMPT,
     userPrompt,
@@ -237,7 +340,7 @@ async function recommendIntervention({
     return finalizeRecommendation(attempt2, 2);
   }
 
-  // Fallback: never block the exercise on a malformed AI response.
+  // Don't let a malformed AI response block the exercise - fall back instead.
   return finalizeRecommendation(
     {
       recommendation_type: "no_action",
@@ -259,25 +362,37 @@ function finalizeRecommendation(recommendation, attempts, extra = {}) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// INTEGRATION POINT 2 of 4: capacity analytics (resource requests).
+// --- Integration point 2 of 4: capacity analytics (resource requests) -----
 //
 // Replace the body of callResourceRequestModel() with a call into your real
-// engine. It must return an object matching the evaluate_resource_needs tool
-// schema (src/schemas/resourceRequest.js). This is the AI-side half of the
-// "AI never touches infrastructure directly" boundary: the gateway only ever
-// turns a `resource_needed: true` answer into a ResourceRequestRaised event
-// (see eventAdapter.js) for the control plane's Resource Scheduler to act on
-// - it never provisions anything itself.
+// engine. It needs to return something matching the evaluate_resource_needs
+// tool schema (src/schemas/resourceRequest.js). This is the AI half of the
+// "AI never touches infrastructure directly" boundary: the gateway only
+// ever turns a resource_needed: true answer into a ResourceRequestRaised
+// event (see eventAdapter.js), and leaves the control plane's Resource
+// Scheduler to decide what actually happens with it.
 // ---------------------------------------------------------------------------
 async function callResourceRequestModel({ systemPrompt, userPrompt, tier, priorError }) {
-  // ---- STUB (replace me) -- see callRecommendationModel() for the shape. --
-  void systemPrompt;
-  void userPrompt;
-  void tier;
-  void priorError;
-  return { resource_needed: false };
-  // ---- END STUB ------------------------------------------------------------
+  try {
+    return await postStructuredChatCompletion({
+      baseUrl: tier.baseUrl,
+      servedModelName: tier.servedModelName,
+      systemPrompt,
+      userPrompt: priorError ? `${userPrompt}\n\nPrevious attempt was invalid: ${priorError}` : userPrompt,
+      temperature: tier.temperature,
+      timeoutMs: tier.timeoutMs,
+      maxTokens: 512,
+      jsonSchema: tier.guidedDecoding
+        ? { name: "evaluate_resource_needs", schema: guidedResourceRequestOutputSchema }
+        : undefined,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[aiEngineClient] resource-request call failed:", err.message);
+    // Same reasoning as callRecommendationModel() above - fail validation,
+    // let evaluateResourceNeeds() fall back to resource_needed: false.
+    return {};
+  }
 }
 
 function buildResourceRequestPrompt({ snapshot, scenarioConstraints }) {
@@ -293,10 +408,10 @@ function buildResourceRequestPrompt({ snapshot, scenarioConstraints }) {
 }
 
 /**
- * Capacity-analytics call: given a current exercise state snapshot, decide
- * whether the scenario needs more infrastructure (or a reshape) than it
- * currently has. Called on state transitions by eventAdapter.js, throttled
- * independently of the live-adaptation recommendation check.
+ * Given a current exercise state snapshot, decide whether the scenario
+ * needs more infrastructure (or a reshape) than it currently has. Called on
+ * state transitions by eventAdapter.js, throttled independently of the
+ * live-adaptation check above.
  *
  * @returns {Promise<{resourceRequest: object, promptVersion: string, schemaVersion: string, attempts: number}>}
  */
@@ -314,7 +429,7 @@ async function evaluateResourceNeeds({ exerciseId, studentId, snapshot, scenario
     return finalizeResourceRequest(attempt1, 1);
   }
 
-  // One retry, with the validation error appended so the model can self-correct.
+  // Same retry-once pattern as the recommendation call above.
   const attempt2 = await callResourceRequestModel({
     systemPrompt: CAPACITY_ANALYTICS_SYSTEM_PROMPT,
     userPrompt,
@@ -326,7 +441,7 @@ async function evaluateResourceNeeds({ exerciseId, studentId, snapshot, scenario
     return finalizeResourceRequest(attempt2, 2);
   }
 
-  // Fallback: never raise a resource request off malformed model output.
+  // Don't raise a resource request off malformed model output - just say no.
   return finalizeResourceRequest(
     { resource_needed: false },
     2,
@@ -344,23 +459,28 @@ function finalizeResourceRequest(resourceRequest, attempts, extra = {}) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// INTEGRATION POINT 3 of 4: qualitative assessment (scoring engine).
-// ---------------------------------------------------------------------------
+// --- Integration point 3 of 4: qualitative assessment (scoring engine) ----
 async function callAssessmentModel({ systemPrompt, userPrompt, tier, priorError }) {
-  // ---- STUB (replace me) -- see callRecommendationModel() for the shape. --
-  void systemPrompt;
-  void userPrompt;
-  void tier;
-  void priorError;
-  return {
-    objective_id: "unknown",
-    quality_score: 0.5,
-    dimension: "methodology",
-    evidence: "",
-    rationale: "Stub engine: no live model wired in yet (see aiEngineClient.js).",
-  };
-  // ---- END STUB ------------------------------------------------------------
+  try {
+    return await postStructuredChatCompletion({
+      baseUrl: tier.baseUrl,
+      servedModelName: tier.servedModelName,
+      systemPrompt,
+      userPrompt: priorError ? `${userPrompt}\n\nPrevious attempt was invalid: ${priorError}` : userPrompt,
+      temperature: tier.temperature,
+      timeoutMs: tier.timeoutMs,
+      maxTokens: 768,
+      jsonSchema: tier.guidedDecoding
+        ? { name: "assess_action_quality", schema: guidedAssessmentOutputSchema }
+        : undefined,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[aiEngineClient] assessment call failed:", err.message);
+    // Same reasoning as callRecommendationModel() above - fail validation,
+    // let assessActionQuality() fall back to a withheld assessment.
+    return {};
+  }
 }
 
 function buildAssessmentPrompt({ objectiveId, dimension, actionLog, submissionText }) {
@@ -378,10 +498,9 @@ function buildAssessmentPrompt({ objectiveId, dimension, actionLog, submissionTe
 }
 
 /**
- * Qualitative assessment call: grade HOW WELL a student completed an
- * objective that has already been marked complete deterministically.
- * Called once per objective on completion (by eventAdapter.js) or
- * synchronously via POST /v1/assessments.
+ * Grade HOW WELL a student completed an objective that's already been
+ * marked complete deterministically elsewhere. Called once per objective on
+ * completion (by eventAdapter.js), or directly via POST /v1/assessments.
  */
 async function assessActionQuality({
   exerciseId,
@@ -434,22 +553,28 @@ function finalizeAssessment(assessment, attempts, extra = {}) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// INTEGRATION POINT 4 of 4: after-action report generation (EP4).
-// No forced tool schema here - the output is a narrative, not a structured
-// decision - but it is still versioned and still auditable via the prompt
-// version stamp and the exact history payload that was sent.
+// --- Integration point 4 of 4: after-action report generation -------------
+// There's no forced tool schema here since the output is a narrative, not a
+// structured decision - but it's still versioned and still auditable via
+// the prompt version stamp and the exact history payload that was sent.
 // ---------------------------------------------------------------------------
 async function callReportModel({ systemPrompt, userPrompt, tier }) {
-  // ---- STUB (replace me) ----------------------------------------------
-  void tier;
-  return {
-    narrative:
-      "Stub engine: no live model wired in yet (see aiEngineClient.js). " +
-      `Would summarize exercise history (${userPrompt.length} chars of context) ` +
-      `using system prompt "${systemPrompt.slice(0, 40)}...".`,
-  };
-  // ---- END STUB ------------------------------------------------------------
+  // No jsonSchema here - the report is narrative prose, not a structured
+  // decision, so it's the one mode that isn't guided-decoded. Errors are
+  // intentionally left to propagate (unlike the three modes above): the
+  // caller, generateAfterActionReport(), has no retry/fallback of its own,
+  // and routes.js already turns a thrown error here into a failed job via
+  // jobStore.fail() rather than blocking anything live.
+  const narrative = await postChatCompletion({
+    baseUrl: tier.baseUrl,
+    servedModelName: tier.servedModelName,
+    systemPrompt,
+    userPrompt,
+    temperature: tier.temperature,
+    timeoutMs: tier.timeoutMs,
+    maxTokens: 4096,
+  });
+  return { narrative };
 }
 
 function buildReportPrompt({ exerciseId, stateSnapshots, recommendations, assessments, finalScores }) {
@@ -467,9 +592,9 @@ function buildReportPrompt({ exerciseId, stateSnapshots, recommendations, assess
 }
 
 /**
- * After-action report call. Long-running relative to the other two modes -
- * callers should treat this as async (see src/store/jobStore.js and the
- * POST /v1/reports + GET /v1/reports/:job_id pair in routes.js).
+ * Generate the after-action report. This one's long-running compared to the
+ * other modes, so treat it as async - see src/store/jobStore.js and the
+ * POST /v1/reports + GET /v1/reports/:job_id pair in routes.js.
  */
 async function generateAfterActionReport({
   exerciseId,
@@ -505,9 +630,12 @@ module.exports = {
   assessActionQuality,
   evaluateResourceNeeds,
   generateAfterActionReport,
-  // exported for tests / introspection only
+  // only exported for tests / introspection
   LIVE_ADAPTATION_SYSTEM_PROMPT_VERSION,
   ASSESSMENT_SYSTEM_PROMPT_VERSION,
   CAPACITY_ANALYTICS_SYSTEM_PROMPT_VERSION,
   REPORT_SYSTEM_PROMPT_VERSION,
+  MODEL_TIERS,
+  __setFetchImpl,
+  __resetFetchImpl,
 };
